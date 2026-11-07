@@ -1,9 +1,27 @@
 # OpenSketch
 
-A SketchUp-style push/pull 3D modeler written in Rust (egui + OpenGL).
+[![CI](https://github.com/Khaldoun-Baz/opensketch/actions/workflows/ci.yml/badge.svg)](https://github.com/Khaldoun-Baz/opensketch/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+An open-source, SketchUp-style push/pull 3D modeler written in Rust (egui + OpenGL).
+Draw on the ground or on faces, push/pull shapes into 3D, and build with groups,
+components, guides, dimensions, textures and shadows.
+
+![OpenSketch: a textured house with a recessed window and sun shadows](docs/screenshot.png)
+
+## Building
+
+Requires Rust stable (1.88+) from <https://rustup.rs>.
 
 ```bash
 cargo run --release
+```
+
+On Linux, first install the windowing libraries:
+
+```bash
+sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
 ```
 
 ## What works today
@@ -55,3 +73,14 @@ cargo run --release
 saves the 3D view to `shot.png` and exits (add `OPENSKETCH_SHOT_NO_GROUND=1` to
 check ground shadows without a ground face). Handy for checking rendering
 changes without clicking through the UI.
+
+## Contributing
+
+Contributions are welcome: bug reports, feature ideas, docs and code. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) to get started, and check the issues labeled
+**good first issue**. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+[MIT](LICENSE). OpenSketch is an independent project and is not affiliated with
+or endorsed by Trimble or SketchUp.

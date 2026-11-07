@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "A SketchUp-style push/pull 3D modeler written in Rust"
 license = "MIT"
+repository = "https://github.com/Khaldoun-Baz/opensketch"
+readme = "README.md"
+keywords = ["cad", "3d", "modeling", "sketchup", "egui"]
+categories = ["graphics", "rendering", "gui"]
+rust-version = "1.88"
 
 [dependencies]
 eframe = "0.31"
