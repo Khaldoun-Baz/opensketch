@@ -10,7 +10,13 @@ components, guides, dimensions, textures and shadows.
 
 ![OpenSketch: a textured house with a recessed window and sun shadows](docs/screenshot.png)
 
-## Building
+## Download
+
+Ready-to-run builds for Windows, macOS (Apple Silicon) and Linux are on the
+[Releases page](https://github.com/Khaldoun-Baz/opensketch/releases/latest).
+See [CHANGELOG.md](CHANGELOG.md) for what's new.
+
+## Building from source
 
 Requires Rust stable (1.88+) from <https://rustup.rs>.
 
