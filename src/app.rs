@@ -4532,37 +4532,44 @@ impl App {
     fn help_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_help;
         egui::Window::new("Keyboard shortcuts").open(&mut open).resizable(false).show(ctx, |ui| {
-            egui::Grid::new("keys").striped(true).show(ui, |ui| {
-                let rows = [
-                    ("Space", "Select"),
-                    ("L / A / R / C / N", "Line / 2-Point Arc / Rectangle / Circle / Polygon"),
-                    ("Follow Me", "Select a path (or a face), then click the profile face"),
-                    ("Intersect Faces", "Edit menu: cut edges where faces/groups cross"),
-                    ("P / F", "Push/Pull / Offset"),
-                    ("M / Q / S", "Move / Rotate / Scale"),
-                    ("E / B / T", "Eraser / Paint Bucket / Tape Measure"),
-                    ("O / H", "Orbit / Pan"),
-                    ("G / Ctrl+G", "Make Component / Make Group"),
-                    ("Double-click group", "Edit it (Esc or click outside closes)"),
-                    ("Shift+Z", "Zoom extents"),
-                    ("Middle-drag", "Orbit (Shift = pan)"),
-                    ("Right-drag", "Pan"),
-                    ("Scroll", "Zoom to cursor"),
-                    ("Arrow →/←/↑", "Lock red / green / blue axis (↓ unlocks)"),
-                    ("Hold Shift", "Lock the current axis inference"),
-                    ("Type + Enter", "Exact value (2.5, 300mm, 4,3, 24s, 3x, /4)"),
-                    ("Ctrl (Move)", "Toggle copy"),
-                    ("Delete", "Erase selection"),
-                    ("PgDn / PgUp", "Next / previous scene"),
-                    ("Ctrl+Z / Ctrl+Y", "Undo / Redo"),
-                    ("Ctrl+S / Ctrl+O", "Save / Open"),
-                    ("Esc", "Cancel / clear selection / close group"),
-                ];
-                for (k, v) in rows {
-                    ui.label(RichText::new(k).monospace().strong());
-                    ui.label(v);
-                    ui.end_row();
-                }
+            egui::ScrollArea::vertical().max_height(700.0).show(ui, |ui| {
+                egui::Grid::new("keys").striped(true).show(ui, |ui| {
+                    let rows = [
+                        ("Space", "Select"),
+                        ("L / A / R / C / N", "Line / 2-Point Arc / Rectangle / Circle / Polygon"),
+                        ("Follow Me", "Select a path (or a face), then click the profile face"),
+                        ("Intersect Faces", "Edit menu: cut edges where faces/groups cross"),
+                        ("P / F", "Push/Pull / Offset"),
+                        ("M / Q / S", "Move / Rotate / Scale"),
+                        ("E / B / T", "Eraser / Paint Bucket / Tape Measure"),
+                        ("Protractor", "Click center → baseline → angle (type 30 or a slope 1:2)"),
+                        ("Dimension", "Two points or an edge; click an arc/circle for R / Ø"),
+                        ("Text", "Click geometry for leader text, empty space for screen text"),
+                        ("Solid Tools", "Click the first solid, then the second"),
+                        ("O / H", "Orbit / Pan"),
+                        ("G / Ctrl+G", "Make Component / Make Group"),
+                        ("Double-click group", "Edit it (Esc or click outside closes)"),
+                        ("Shift+Z", "Zoom extents"),
+                        ("Middle-drag", "Orbit (Shift = pan)"),
+                        ("Right-drag", "Pan"),
+                        ("Scroll", "Zoom to cursor"),
+                        ("Arrow →/←/↑", "Lock red / green / blue axis (↓ unlocks)"),
+                        ("Hold Shift", "Lock the current axis inference"),
+                        ("Type + Enter", "Exact value (2.5, 300mm, 4,3, 24s, 3x, /4)"),
+                        ("Ctrl (Move)", "Toggle copy"),
+                        ("Ctrl (Tape Measure)", "Toggle measure-only (no guide)"),
+                        ("Delete", "Erase selection"),
+                        ("PgDn / PgUp", "Next / previous scene"),
+                        ("Ctrl+Z / Ctrl+Y", "Undo / Redo"),
+                        ("Ctrl+S / Ctrl+O", "Save / Open"),
+                        ("Esc", "Cancel / clear selection / close group"),
+                    ];
+                    for (k, v) in rows {
+                        ui.label(RichText::new(k).monospace().strong());
+                        ui.label(v);
+                        ui.end_row();
+                    }
+                });
             });
         });
         self.show_help = open;
