@@ -148,7 +148,7 @@ impl<'a> Picker<'a> {
         let mut best: Option<(usize, f32)> = None;
         for (i, (_, tri)) in self.tris.iter().enumerate() {
             if let Some(t) = ray_tri(o, d, tri) {
-                if best.map_or(true, |(_, bt)| t < bt) {
+                if best.is_none_or(|(_, bt)| t < bt) {
                     best = Some((i, t));
                 }
             }
@@ -187,7 +187,7 @@ impl<'a> Picker<'a> {
                 continue;
             }
             if let Some(dist) = self.screen_dist(p, cursor) {
-                if dist < tol && best.map_or(true, |b| dist < b.2) {
+                if dist < tol && best.is_none_or(|b| dist < b.2) {
                     best = Some((id, p, dist));
                 }
             }
@@ -205,12 +205,7 @@ impl<'a> Picker<'a> {
     }
 
     pub fn pick_vertex(&self, cursor: Pos2, tol: f32, o: Vec3, d: Vec3, face_t: Option<f32>) -> Option<(Option<Id>, Vec3)> {
-        let cands = self
-            .model
-            .vertices
-            .iter()
-            .map(|(&id, &p)| (Some(id), p))
-            .chain(self.points.iter().map(|&p| (None, p)));
+        let cands = self.model.vertices.iter().map(|(&id, &p)| (Some(id), p)).chain(self.points.iter().map(|&p| (None, p)));
         self.nearest(cands, cursor, tol, o, d, face_t)
     }
 
@@ -245,9 +240,7 @@ impl<'a> Picker<'a> {
     pub fn pick_guide(&self, cursor: Pos2, tol: f32) -> Option<usize> {
         let (o, d) = self.ray(cursor);
         let face_t = self.pick_face(o, d).map(|h| h.t);
-        self.pick_guide_point(cursor, tol + 2.0, o, d, face_t)
-            .or_else(|| self.pick_guide_line(cursor, tol, o, d, face_t))
-            .map(|x| x.0)
+        self.pick_guide_point(cursor, tol + 2.0, o, d, face_t).or_else(|| self.pick_guide_line(cursor, tol, o, d, face_t)).map(|x| x.0)
     }
 
     /// Editable edge under the cursor (for selection and the eraser).
@@ -317,7 +310,7 @@ impl<'a> Picker<'a> {
                     continue;
                 }
                 if let Some(dist) = self.screen_dist(p, cursor) {
-                    if dist < 12.0 && best.map_or(true, |b| dist < b.2) {
+                    if dist < 12.0 && best.is_none_or(|b| dist < b.2) {
                         best = Some((i, p, dist));
                     }
                 }

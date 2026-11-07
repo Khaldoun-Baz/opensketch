@@ -530,7 +530,10 @@ mod tests {
         let mut active = cube(Vec3::ZERO, Vec3::splat(2.0));
         active.merge_from(&cube(v(1.0, 1.0, 1.0), v(3.0, 3.0, 3.0)));
         let fs: Vec<Id> = active.faces.keys().copied().collect();
-        let (first, second): (Vec<Id>, Vec<Id>) = fs.iter().partition(|f| active.pos(active.faces[*f].outer[0]).max_element() > 2.0 + 1e-4 || active.faces[*f].outer.iter().all(|&x| active.pos(x).min_element() > 1.0 - 1e-4));
+        let (first, second): (Vec<Id>, Vec<Id>) = fs.iter().partition(|f| {
+            active.pos(active.faces[*f].outer[0]).max_element() > 2.0 + 1e-4
+                || active.faces[*f].outer.iter().all(|&x| active.pos(x).min_element() > 1.0 - 1e-4)
+        });
         assert_eq!((first.len(), second.len()), (6, 6));
         let b = doc.make_group(&[], &mut active, &first, &[], &[], DefKind::Group).unwrap();
         let a = doc.make_group(&[], &mut active, &second, &[], &[], DefKind::Group).unwrap();

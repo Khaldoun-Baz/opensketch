@@ -259,13 +259,7 @@ pub fn default_materials() -> Vec<Material> {
 
 impl Model {
     pub fn new() -> Self {
-        Self {
-            vertices: BTreeMap::new(),
-            edges: BTreeMap::new(),
-            faces: BTreeMap::new(),
-            materials: Vec::new(),
-            next_id: 1,
-        }
+        Self { vertices: BTreeMap::new(), edges: BTreeMap::new(), faces: BTreeMap::new(), materials: Vec::new(), next_id: 1 }
     }
 
     fn nid(&mut self) -> Id {
@@ -362,11 +356,7 @@ impl Model {
     }
 
     pub fn faces_with_edge(&self, a: Id, b: Id) -> Vec<Id> {
-        self.faces
-            .iter()
-            .filter(|(_, f)| f.loops().any(|l| loop_has_edge(l, a, b)))
-            .map(|(i, _)| *i)
-            .collect()
+        self.faces.iter().filter(|(_, f)| f.loops().any(|l| loop_has_edge(l, a, b))).map(|(i, _)| *i).collect()
     }
 
     pub fn edge_faces(&self, e: Id) -> Vec<Id> {
@@ -415,7 +405,7 @@ impl Model {
 
     // ----- faces ----------------------------------------------------------
 
-    fn orient(&self, lp: &mut Vec<Id>, n: Vec3, ccw: bool) {
+    fn orient(&self, lp: &mut [Id], n: Vec3, ccw: bool) {
         let nn = newell(&self.loop_points(lp));
         if (nn.dot(n) > 0.0) != ccw {
             lp.reverse();
@@ -438,13 +428,7 @@ impl Model {
     }
 
     /// Low-level face insertion with explicit orientation (no inference).
-    pub fn add_face_loops(
-        &mut self,
-        outer: Vec<Id>,
-        holes: Vec<Vec<Id>>,
-        normal: Vec3,
-        material: Option<usize>,
-    ) -> Option<Id> {
+    pub fn add_face_loops(&mut self, outer: Vec<Id>, holes: Vec<Vec<Id>>, normal: Vec3, material: Option<usize>) -> Option<Id> {
         self.insert_face(None, outer, holes, normal, material)
     }
 
@@ -549,11 +533,7 @@ impl Model {
             return Some(f);
         }
         let ip = inside?;
-        self.faces
-            .iter()
-            .filter(|(_, x)| x.normal.dot(n).abs() > 0.9999)
-            .map(|(i, _)| *i)
-            .find(|&i| self.point_in_face(i, ip))
+        self.faces.iter().filter(|(_, x)| x.normal.dot(n).abs() > 0.9999).map(|(i, _)| *i).find(|&i| self.point_in_face(i, ip))
     }
 
     pub fn face_2d(&self, f: Id) -> Option<(Vec3, Vec3, Vec<Vec<Vec2>>)> {
@@ -561,10 +541,14 @@ impl Model {
         let (u, v) = plane_basis(face.normal);
         let loops = face
             .loops()
-            .map(|l| l.iter().map(|&id| {
-                let p = self.pos(id);
-                Vec2::new(p.dot(u), p.dot(v))
-            }).collect())
+            .map(|l| {
+                l.iter()
+                    .map(|&id| {
+                        let p = self.pos(id);
+                        Vec2::new(p.dot(u), p.dot(v))
+                    })
+                    .collect()
+            })
             .collect();
         Some((u, v, loops))
     }
@@ -580,17 +564,18 @@ impl Model {
             return false;
         }
         let face = &self.faces[&f];
-        face.loops().all(|l| {
-            (0..l.len()).all(|i| point_seg(p, self.pos(l[i]), self.pos(l[(i + 1) % l.len()])).0 > EPS)
-        })
+        face.loops().all(|l| (0..l.len()).all(|i| point_seg(p, self.pos(l[i]), self.pos(l[(i + 1) % l.len()])).0 > EPS))
     }
 
     pub fn point_in_loop(&self, lp: &[Id], p: Vec3, n: Vec3) -> bool {
         let (u, v) = plane_basis(n);
-        let poly: Vec<Vec2> = lp.iter().map(|&id| {
-            let q = self.pos(id);
-            Vec2::new(q.dot(u), q.dot(v))
-        }).collect();
+        let poly: Vec<Vec2> = lp
+            .iter()
+            .map(|&id| {
+                let q = self.pos(id);
+                Vec2::new(q.dot(u), q.dot(v))
+            })
+            .collect();
         point_in_poly(Vec2::new(p.dot(u), p.dot(v)), &poly)
     }
 
@@ -602,11 +587,7 @@ impl Model {
     }
 
     pub fn recompute_normals(&mut self) {
-        let normals: Vec<(Id, Vec3)> = self
-            .faces
-            .iter()
-            .map(|(i, f)| (*i, newell(&self.loop_points(&f.outer))))
-            .collect();
+        let normals: Vec<(Id, Vec3)> = self.faces.iter().map(|(i, f)| (*i, newell(&self.loop_points(&f.outer)))).collect();
         for (i, n) in normals {
             if n.length() > 1e-12 {
                 self.faces.get_mut(&i).unwrap().normal = n.normalize();
@@ -636,7 +617,9 @@ impl Model {
             }
         }
         let idx = earcut(&data, &hole_idx);
-        idx.chunks_exact(3)
+        idx.as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| {
                 let (a, mut b, mut c2) = (ids[c[0]], ids[c[1]], ids[c[2]]);
                 let (pa, pb, pc) = (self.pos(a), self.pos(b), self.pos(c2));
@@ -817,9 +800,7 @@ impl Model {
             if let Some(ip) = self.interior_point(&lp, n) {
                 let set: HashSet<Id> = lp.iter().copied().collect();
                 let covered = self.faces.iter().any(|(fid, f)| {
-                    f.normal.dot(n).abs() > 0.9999
-                        && f.vertices().any(|v| set.contains(&v))
-                        && self.point_in_face(*fid, ip)
+                    f.normal.dot(n).abs() > 0.9999 && f.vertices().any(|v| set.contains(&v)) && self.point_in_face(*fid, ip)
                 });
                 if covered {
                     continue;
@@ -841,7 +822,7 @@ impl Model {
         let mut lb = fb.outer.clone();
         let Some(ia) = loop_edge_index(&la, a, b) else { return false };
         let (x, y) = (la[ia], la[(ia + 1) % la.len()]); // la has x -> y
-        // lb must traverse y -> x
+                                                        // lb must traverse y -> x
         let ib = loop_edge_index(&lb, a, b);
         let Some(ib) = ib else { return false };
         if lb[ib] == x {
@@ -868,8 +849,7 @@ impl Model {
 
     fn coplanar(&self, f1: Id, f2: Id) -> bool {
         let (a, b) = (&self.faces[&f1], &self.faces[&f2]);
-        a.normal.dot(b.normal) > 0.9999
-            && (self.pos(b.outer[0]) - self.pos(a.outer[0])).dot(a.normal).abs() < EPS * 10.0
+        a.normal.dot(b.normal) > 0.9999 && (self.pos(b.outer[0]) - self.pos(a.outer[0])).dot(a.normal).abs() < EPS * 10.0
     }
 
     /// Removes a vertex that only joins two collinear edges.
@@ -930,14 +910,9 @@ impl Model {
                 face.holes.retain(|h| !loop_has_edge(h, a, b));
             }
         }
-        let outer_fs: Vec<Id> = fs
-            .into_iter()
-            .filter(|f| self.faces.get(f).map(|x| loop_has_edge(&x.outer, a, b)).unwrap_or(false))
-            .collect();
-        if outer_fs.len() == 2
-            && self.coplanar(outer_fs[0], outer_fs[1])
-            && self.merge_faces(outer_fs[0], outer_fs[1], a, b)
-        {
+        let outer_fs: Vec<Id> =
+            fs.into_iter().filter(|f| self.faces.get(f).map(|x| loop_has_edge(&x.outer, a, b)).unwrap_or(false)).collect();
+        if outer_fs.len() == 2 && self.coplanar(outer_fs[0], outer_fs[1]) && self.merge_faces(outer_fs[0], outer_fs[1], a, b) {
             self.edges.remove(&e);
             self.remove_collinear_vertex(a);
             self.remove_collinear_vertex(b);
@@ -981,11 +956,8 @@ impl Model {
         }
         let n = face.normal.normalize();
         let off = n * d;
-        let lone = face.loops().all(|lp| {
-            (0..lp.len()).all(|i| {
-                self.faces_with_edge(lp[i], lp[(i + 1) % lp.len()]).iter().all(|g| *g == f)
-            })
-        });
+        let lone =
+            face.loops().all(|lp| (0..lp.len()).all(|i| self.faces_with_edge(lp[i], lp[(i + 1) % lp.len()]).iter().all(|g| *g == f)));
         let recess = !lone && d < 0.0 && self.material_behind(f);
         self.faces.remove(&f);
 
@@ -995,10 +967,13 @@ impl Model {
         let mut sides = Vec::new();
         let loops: Vec<Vec<Id>> = face.loops().cloned().collect();
         for lp in &loops {
-            let nl: Vec<Id> = lp.iter().map(|&v| {
-                let p = self.pos(v) + off;
-                self.add_vertex(p)
-            }).collect();
+            let nl: Vec<Id> = lp
+                .iter()
+                .map(|&v| {
+                    let p = self.pos(v) + off;
+                    self.add_vertex(p)
+                })
+                .collect();
             for i in 0..lp.len() {
                 let j = (i + 1) % lp.len();
                 let (v0, v1, w0, w1) = (lp[i], lp[j], nl[i], nl[j]);
@@ -1037,11 +1012,7 @@ impl Model {
         let n = face.normal;
         let Some(t) = self.triangulate(f).into_iter().next() else { return false };
         let o = (t[0] + t[1] + t[2]) / 3.0;
-        self.faces
-            .keys()
-            .filter(|g| **g != f)
-            .flat_map(|g| self.triangulate(*g))
-            .any(|tri| ray_hits_triangle(o, -n, &tri))
+        self.faces.keys().filter(|g| **g != f).flat_map(|g| self.triangulate(*g)).any(|tri| ray_hits_triangle(o, -n, &tri))
     }
 
     /// A pocket floor that reached a face on the far side opens a hole there.
@@ -1091,8 +1062,7 @@ impl Model {
         let mut sides: Vec<Id> = Vec::new();
         for lp in face.loops() {
             for i in 0..lp.len() {
-                let others: Vec<Id> =
-                    self.faces_with_edge(lp[i], lp[(i + 1) % lp.len()]).into_iter().filter(|g| *g != f).collect();
+                let others: Vec<Id> = self.faces_with_edge(lp[i], lp[(i + 1) % lp.len()]).into_iter().filter(|g| *g != f).collect();
                 if others.len() != 1 || self.faces[&others[0]].normal.dot(n).abs() > 1e-3 {
                     return None;
                 }
@@ -1190,11 +1160,10 @@ impl Model {
                 self.faces.get_mut(&g).unwrap().holes.remove(i);
             } else {
                 // Flush with coplanar neighbours: match their orientation and merge.
-                let pairs: Vec<(Id, Id)> =
-                    (0..fc.outer.len()).map(|i| (fc.outer[i], fc.outer[(i + 1) % fc.outer.len()])).collect();
-                let flip = pairs.iter().any(|&(a, b)| {
-                    self.faces_with_edge(a, b).iter().any(|g| *g != f && self.faces[g].normal.dot(fc.normal) < -0.9999)
-                });
+                let pairs: Vec<(Id, Id)> = (0..fc.outer.len()).map(|i| (fc.outer[i], fc.outer[(i + 1) % fc.outer.len()])).collect();
+                let flip = pairs
+                    .iter()
+                    .any(|&(a, b)| self.faces_with_edge(a, b).iter().any(|g| *g != f && self.faces[g].normal.dot(fc.normal) < -0.9999));
                 if flip {
                     let x = self.faces.get_mut(&f).unwrap();
                     x.outer.reverse();
@@ -1353,10 +1322,9 @@ impl Model {
             }
         }
         for v in used {
-            if !map.contains_key(&v) {
-                let p = self.pos(v);
-                let nv = self.add_vertex_raw(p);
-                map.insert(v, nv);
+            if let std::collections::hash_map::Entry::Vacant(slot) = map.entry(v) {
+                let p = self.vertices[&v];
+                slot.insert(self.add_vertex_raw(p));
             }
         }
         let mut new_edges = Vec::new();
@@ -1417,12 +1385,8 @@ impl Model {
         let to2 = |p: Vec3| Vec2::new(p.dot(u), p.dot(v));
         for _ in 0..10_000 {
             let on = |p: Vec3| (p.dot(n) - d).abs() < EPS * 10.0;
-            let edges: Vec<(Id, Id, Id, Vec3, Vec3)> = self
-                .edges
-                .iter()
-                .map(|(&id, e)| (id, e.a, e.b, self.pos(e.a), self.pos(e.b)))
-                .filter(|x| on(x.3) && on(x.4))
-                .collect();
+            let edges: Vec<(Id, Id, Id, Vec3, Vec3)> =
+                self.edges.iter().map(|(&id, e)| (id, e.a, e.b, self.pos(e.a), self.pos(e.b))).filter(|x| on(x.3) && on(x.4)).collect();
             let verts: HashSet<Id> = edges.iter().flat_map(|x| [x.1, x.2]).collect();
             let mut split: Option<(Id, Vec3)> = None;
 
@@ -1476,12 +1440,7 @@ impl Model {
         }
         // Collinear overlaps leave duplicate edges between the same vertices.
         let mut seen: HashSet<(Id, Id)> = HashSet::new();
-        let dupes: Vec<Id> = self
-            .edges
-            .iter()
-            .filter(|(_, e)| !seen.insert((e.a.min(e.b), e.a.max(e.b))))
-            .map(|(i, _)| *i)
-            .collect();
+        let dupes: Vec<Id> = self.edges.iter().filter(|(_, e)| !seen.insert((e.a.min(e.b), e.a.max(e.b)))).map(|(i, _)| *i).collect();
         for e in dupes {
             self.edges.remove(&e);
         }
@@ -1524,17 +1483,13 @@ impl Model {
                 }
             })
             .collect();
-        let covered_by = |p: Vec2| {
-            origs
-                .iter()
-                .position(|o| point_in_poly(p, &o.loops[0]) && !o.loops[1..].iter().any(|h| point_in_poly(p, h)))
-        };
+        let covered_by =
+            |p: Vec2| origs.iter().position(|o| point_in_poly(p, &o.loops[0]) && !o.loops[1..].iter().any(|h| point_in_poly(p, h)));
 
         self.split_plane_edges(n, d);
 
         // Planar graph of the plane's edges, neighbours sorted by angle.
-        let pedges: Vec<(Id, Id)> =
-            self.edges.values().filter(|e| on(self, e.a) && on(self, e.b)).map(|e| (e.a, e.b)).collect();
+        let pedges: Vec<(Id, Id)> = self.edges.values().filter(|e| on(self, e.a) && on(self, e.b)).map(|e| (e.a, e.b)).collect();
         let mut adj: HashMap<Id, Vec<Id>> = HashMap::new();
         for &(a, b) in &pedges {
             adj.entry(a).or_default().push(b);
@@ -1644,12 +1599,10 @@ impl Model {
                 }
             }
             let tri = earcut(&data, &hole_idx);
-            let best = tri
-                .chunks_exact(3)
-                .max_by(|a, b| {
-                    let ar = |t: &[usize]| (pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]]).abs();
-                    ar(a).total_cmp(&ar(b))
-                });
+            let best = tri.as_chunks::<3>().0.iter().max_by(|a, b| {
+                let ar = |t: &[usize; 3]| (pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]]).abs();
+                ar(a).total_cmp(&ar(b))
+            });
             if let Some(t) = best {
                 c.owner = covered_by((pts[t[0]] + pts[t[1]] + pts[t[2]]) / 3.0);
             }
@@ -1844,9 +1797,7 @@ impl Model {
         let doomed: Vec<Id> = self
             .faces
             .iter()
-            .filter(|(_, f)| {
-                f.normal.dot(n).abs() > 0.9999 && f.outer.iter().all(|&x| (self.pos(x).dot(n) - d).abs() < EPS * 10.0)
-            })
+            .filter(|(_, f)| f.normal.dot(n).abs() > 0.9999 && f.outer.iter().all(|&x| (self.pos(x).dot(n) - d).abs() < EPS * 10.0))
             .filter_map(|(&id, _)| {
                 let t = *self.triangulate(id).first()?;
                 let c = to2((t[0] + t[1] + t[2]) / 3.0);
@@ -1897,9 +1848,9 @@ impl Model {
             return;
         }
         let on = |m: &Model, f: Id| {
-            m.faces.get(&f).is_some_and(|x| {
-                x.normal.dot(n).abs() > 0.9999 && x.outer.iter().all(|&v| (m.pos(v).dot(n) - d).abs() < EPS * 10.0)
-            })
+            m.faces
+                .get(&f)
+                .is_some_and(|x| x.normal.dot(n).abs() > 0.9999 && x.outer.iter().all(|&v| (m.pos(v).dot(n) - d).abs() < EPS * 10.0))
         };
         let mut inner = Vec::new();
         for i in 0..lp.len() {
@@ -2155,12 +2106,12 @@ impl Model {
         for seg in 0..segs {
             let (k0, k1) = (seg, (seg + 1) % m);
             let d = dir(seg);
-            for li in 0..ids[k0].len() {
-                let len = ids[k0][li].len();
+            for (lp0, lp1) in ids[k0].iter().zip(&ids[k1]) {
+                let len = lp0.len();
                 for j in 0..len {
                     let j1 = (j + 1) % len;
-                    let (a, b) = (ids[k0][li][j], ids[k0][li][j1]);
-                    let (c2, d2) = (ids[k1][li][j1], ids[k1][li][j]);
+                    let (a, b) = (lp0[j], lp0[j1]);
+                    let (c2, d2) = (lp1[j1], lp1[j]);
                     let out = (self.pos(b) - self.pos(a)).cross(d * s);
                     self.add_face_loops(vec![a, b, c2, d2], vec![], out, face.material);
                     pairs.extend([(a, b), (a, d2), (b, c2), (d2, c2)]);
@@ -2225,18 +2176,8 @@ impl Model {
                 }
             }
         }
-        let faces = self
-            .faces
-            .iter()
-            .filter(|(_, f)| f.vertices().all(|v| visited.contains(&v)))
-            .map(|(i, _)| *i)
-            .collect();
-        let edges = self
-            .edges
-            .iter()
-            .filter(|(_, e)| visited.contains(&e.a))
-            .map(|(i, _)| *i)
-            .collect();
+        let faces = self.faces.iter().filter(|(_, f)| f.vertices().all(|v| visited.contains(&v))).map(|(i, _)| *i).collect();
+        let edges = self.edges.iter().filter(|(_, e)| visited.contains(&e.a)).map(|(i, _)| *i).collect();
         (faces, edges)
     }
 
@@ -2332,7 +2273,7 @@ fn line_intervals(loops: &[Vec<Vec3>], n: Vec3, p0: Vec3, dir: Vec3) -> Vec<(f32
         }
     }
     ts.sort_by(|a, b| a.total_cmp(b));
-    ts.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+    ts.as_chunks::<2>().0.iter().map(|c| (c[0], c[1])).collect()
 }
 
 /// Thin wrapper around earcutr returning triangle indices (empty on failure).
@@ -2349,16 +2290,7 @@ mod tests {
     use super::*;
 
     fn rect(m: &mut Model, x0: f32, y0: f32, x1: f32, y1: f32, z: f32) -> Id {
-        m.add_polygon(
-            &[
-                Vec3::new(x0, y0, z),
-                Vec3::new(x1, y0, z),
-                Vec3::new(x1, y1, z),
-                Vec3::new(x0, y1, z),
-            ],
-            None,
-        )
-        .unwrap()
+        m.add_polygon(&[Vec3::new(x0, y0, z), Vec3::new(x1, y0, z), Vec3::new(x1, y1, z), Vec3::new(x0, y1, z)], None).unwrap()
     }
 
     #[test]
@@ -2475,8 +2407,7 @@ mod tests {
         let a = m.vertex_on_geometry(Vec3::new(1.0, 0.0, 0.0));
         let b = m.vertex_on_geometry(Vec3::new(-1.0, 0.0, 0.0));
         m.insert_line(a, b);
-        let ids: Vec<Id> =
-            arc_pts(Vec3::ZERO, 1.0, 0.0, std::f32::consts::PI, 12).iter().map(|p| m.vertex_on_geometry(*p)).collect();
+        let ids: Vec<Id> = arc_pts(Vec3::ZERO, 1.0, 0.0, std::f32::consts::PI, 12).iter().map(|p| m.vertex_on_geometry(*p)).collect();
         assert!(m.insert_curve(&ids));
         assert_eq!(m.faces.len(), 1);
         // 12-segment half polygon: 6 * sin(15°)
@@ -2500,12 +2431,7 @@ mod tests {
     #[test]
     fn follow_me_straight_path_makes_box() {
         let mut m = Model::new();
-        let f = m
-            .add_polygon(
-                &[Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 1.0), Vec3::new(0.0, 0.0, 1.0)],
-                None,
-            )
-            .unwrap();
+        let f = m.add_polygon(&[Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 1.0), Vec3::new(0.0, 0.0, 1.0)], None).unwrap();
         assert!(m.follow_me(f, &[Vec3::new(0.0, 0.5, 0.5), Vec3::new(3.0, 0.5, 0.5)], false));
         assert_eq!(m.faces.len(), 6);
         assert!((volume(&m) - 3.0).abs() < 1e-3, "volume {}", volume(&m));
@@ -2514,12 +2440,7 @@ mod tests {
     #[test]
     fn follow_me_corner_is_mitred() {
         let mut m = Model::new();
-        let f = m
-            .add_polygon(
-                &[Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 1.0), Vec3::new(0.0, 0.0, 1.0)],
-                None,
-            )
-            .unwrap();
+        let f = m.add_polygon(&[Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 1.0), Vec3::new(0.0, 0.0, 1.0)], None).unwrap();
         let path = [Vec3::new(0.0, 0.5, 0.5), Vec3::new(3.0, 0.5, 0.5), Vec3::new(3.0, 3.5, 0.5)];
         assert!(m.follow_me(f, &path, false));
         assert_eq!(m.faces.len(), 10);
@@ -2531,10 +2452,7 @@ mod tests {
     fn follow_me_closed_path_revolves() {
         let mut m = Model::new();
         let f = m
-            .add_polygon(
-                &[Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 1.0)],
-                None,
-            )
+            .add_polygon(&[Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 1.0)], None)
             .unwrap();
         let path: Vec<Vec3> = (0..24)
             .map(|i| {
@@ -2638,12 +2556,7 @@ mod tests {
         // A second, separate box poking through the first one's +X and +Y sides.
         let b = m
             .add_polygon(
-                &[
-                    Vec3::new(1.0, 1.0, 0.5),
-                    Vec3::new(3.0, 1.0, 0.5),
-                    Vec3::new(3.0, 3.0, 0.5),
-                    Vec3::new(1.0, 3.0, 0.5),
-                ],
+                &[Vec3::new(1.0, 1.0, 0.5), Vec3::new(3.0, 1.0, 0.5), Vec3::new(3.0, 3.0, 0.5), Vec3::new(1.0, 3.0, 0.5)],
                 Some(Vec3::Z),
             )
             .unwrap();
@@ -2655,9 +2568,10 @@ mod tests {
         assert!(added >= 8, "added {added} edges");
         assert!(m.faces.len() > faces_before);
         // On the first box's +X side, the second box leaves a 1 x 1 imprint.
-        let imprint = m.faces.iter().any(|(f, face)| {
-            face.normal.x > 0.99 && (m.pos(face.outer[0]).x - 2.0).abs() < 1e-4 && (m.face_area(*f) - 1.0).abs() < 1e-3
-        });
+        let imprint = m
+            .faces
+            .iter()
+            .any(|(f, face)| face.normal.x > 0.99 && (m.pos(face.outer[0]).x - 2.0).abs() < 1e-4 && (m.face_area(*f) - 1.0).abs() < 1e-3);
         assert!(imprint);
     }
 
@@ -2666,10 +2580,7 @@ mod tests {
         // A wall face cut by a cylinder that is not part of the mesh (e.g. a group).
         let mut m = Model::new();
         let wall = m
-            .add_polygon(
-                &[Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 3.0)],
-                Some(-Vec3::Y),
-            )
+            .add_polygon(&[Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 3.0)], Some(-Vec3::Y))
             .unwrap();
         let mut cutter = Model::new();
         let pts: Vec<Vec3> = (0..16)
@@ -2689,11 +2600,7 @@ mod tests {
     }
 
     fn wall_xz(m: &mut Model) -> Id {
-        m.add_polygon(
-            &[Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 3.0)],
-            Some(-Vec3::Y),
-        )
-        .unwrap()
+        m.add_polygon(&[Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 3.0)], Some(-Vec3::Y)).unwrap()
     }
 
     fn xz_rect(x0: f32, x1: f32, z0: f32, z1: f32) -> Vec<Vec3> {
@@ -2757,9 +2664,8 @@ mod tests {
     // ----- push/pull workflows ----------------------------------------------------
 
     fn ground_box(m: &mut Model, x0: f32, y0: f32, x1: f32, y1: f32, h: f32) {
-        let f = m
-            .add_polygon(&[Vec3::new(x0, y0, 0.0), Vec3::new(x1, y0, 0.0), Vec3::new(x1, y1, 0.0), Vec3::new(x0, y1, 0.0)], None)
-            .unwrap();
+        let f =
+            m.add_polygon(&[Vec3::new(x0, y0, 0.0), Vec3::new(x1, y0, 0.0), Vec3::new(x1, y1, 0.0), Vec3::new(x0, y1, 0.0)], None).unwrap();
         m.push_pull(f, -h); // ground faces point down: negative pulls up
     }
 
@@ -2774,8 +2680,7 @@ mod tests {
     }
 
     fn top_rect(m: &mut Model, x0: f32, y0: f32, x1: f32, y1: f32, z: f32) -> Id {
-        m.add_polygon(&[Vec3::new(x0, y0, z), Vec3::new(x1, y0, z), Vec3::new(x1, y1, z), Vec3::new(x0, y1, z)], Some(Vec3::Z))
-            .unwrap()
+        m.add_polygon(&[Vec3::new(x0, y0, z), Vec3::new(x1, y0, z), Vec3::new(x1, y1, z), Vec3::new(x0, y1, z)], Some(Vec3::Z)).unwrap()
     }
 
     #[test]

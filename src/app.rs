@@ -3,22 +3,20 @@
 use crate::annotation::{circumcenter, Annotation};
 use crate::camera::Camera;
 use crate::document::{box_corners, glue_frame, DefId, DefKind, Document, Scene, SceneStyle, ROOT};
-use crate::inference::{Owner, Picker, Snap, SnapKind, AXES};
 use crate::guide::{self, Guide};
+use crate::inference::{Owner, Picker, Snap, SnapKind, AXES};
 use crate::io;
 use crate::model::{closest_on_line_to_ray, drawing_axes, offset_loop, point_seg, ray_plane, Id, Material, Model, EPS};
 use crate::render::{push_face_vertex, push_line, push_vertex, DrawData, Renderer, ShadowData, TexBatch, FLOATS};
+use crate::solid::{self, BoolOp};
 use crate::sun::{self, Sun};
 use crate::texture::{self, Pattern, Pixels, Texture};
-use crate::solid::{self, BoolOp};
 use crate::units::Units;
-use eframe::egui::{
-    self, Align2, Color32, FontId, Key, Modifiers, PointerButton, Pos2, Rect, RichText, Sense, Shape, Stroke, Vec2,
-};
+use eframe::egui::{self, Align2, Color32, FontId, Key, Modifiers, PointerButton, Pos2, Rect, RichText, Sense, Shape, Stroke, Vec2};
 use eframe::glow;
 use glam::{Mat3, Mat4, Vec3};
-use std::collections::{BTreeSet, HashMap, HashSet};
 use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -177,43 +175,139 @@ struct Targets {
 #[derive(Clone)]
 enum State {
     Idle,
-    Line { start: Vec3 },
-    Rect { p0: Vec3, p1: Vec3, n: Vec3, u: Vec3, v: Vec3, on_face: bool },
-    Circle { center: Vec3, edge: Vec3, n: Vec3, on_face: bool },
+    Line {
+        start: Vec3,
+    },
+    Rect {
+        p0: Vec3,
+        p1: Vec3,
+        n: Vec3,
+        u: Vec3,
+        v: Vec3,
+        on_face: bool,
+    },
+    Circle {
+        center: Vec3,
+        edge: Vec3,
+        n: Vec3,
+        on_face: bool,
+    },
     /// 2-point arc: start placed, choosing the end.
-    ArcEnd { p0: Vec3, p1: Vec3, n: Vec3 },
+    ArcEnd {
+        p0: Vec3,
+        p1: Vec3,
+        n: Vec3,
+    },
     /// 2-point arc: chord placed, choosing the bulge.
-    ArcBulge { p0: Vec3, p1: Vec3, n: Vec3, bulge: f32 },
+    ArcBulge {
+        p0: Vec3,
+        p1: Vec3,
+        n: Vec3,
+        bulge: f32,
+    },
     /// Center arc / pie: center placed, choosing the start (radius).
-    ArcStart { center: Vec3, edge: Vec3, n: Vec3, on_face: bool },
+    ArcStart {
+        center: Vec3,
+        edge: Vec3,
+        n: Vec3,
+        on_face: bool,
+    },
     /// Center arc / pie: choosing the sweep angle.
-    ArcSweep { center: Vec3, start: Vec3, n: Vec3, on_face: bool, angle: f32 },
-    PushPull { face: Id, start: Vec3, n: Vec3, dist: f32 },
-    Move { t: Targets, base: Vec3, delta: Vec3, copy: bool },
-    RotateCenter { t: Targets, center: Vec3, n: Vec3 },
-    RotateAngle { t: Targets, center: Vec3, n: Vec3, ref_dir: Vec3, angle: f32 },
-    Scale { t: Targets, center: Vec3, ref_dist: f32, factor: Vec3 },
-    Offset { face: Id, dist: f32 },
+    ArcSweep {
+        center: Vec3,
+        start: Vec3,
+        n: Vec3,
+        on_face: bool,
+        angle: f32,
+    },
+    PushPull {
+        face: Id,
+        start: Vec3,
+        n: Vec3,
+        dist: f32,
+    },
+    Move {
+        t: Targets,
+        base: Vec3,
+        delta: Vec3,
+        copy: bool,
+    },
+    RotateCenter {
+        t: Targets,
+        center: Vec3,
+        n: Vec3,
+    },
+    RotateAngle {
+        t: Targets,
+        center: Vec3,
+        n: Vec3,
+        ref_dir: Vec3,
+        angle: f32,
+    },
+    Scale {
+        t: Targets,
+        center: Vec3,
+        ref_dist: f32,
+        factor: Vec3,
+    },
+    Offset {
+        face: Id,
+        dist: f32,
+    },
     /// Tape Measure. `dir` is set when measuring from an edge or guide line
     /// (makes a parallel guide); `end` is where the guide will go.
-    Tape { start: Vec3, dir: Option<Vec3>, end: Vec3 },
+    Tape {
+        start: Vec3,
+        dir: Option<Vec3>,
+        end: Vec3,
+    },
     /// Dimension: first point placed, choosing the second.
-    DimSecond { a: Vec3 },
+    DimSecond {
+        a: Vec3,
+    },
     /// Dimension: both points placed, dragging the dimension line out.
-    DimOffset { a: Vec3, b: Vec3, offset: Vec3 },
+    DimOffset {
+        a: Vec3,
+        b: Vec3,
+        offset: Vec3,
+    },
     /// Radius/diameter dimension of an arc or circle: placing the label.
-    DimRadial { center: Vec3, radius: f32, normal: Vec3, diameter: bool, at: Vec3 },
+    DimRadial {
+        center: Vec3,
+        radius: f32,
+        normal: Vec3,
+        diameter: bool,
+        at: Vec3,
+    },
     /// Text: anchor picked, placing the text.
-    TextPlace { anchor: Vec3, text: String, at: Vec3 },
+    TextPlace {
+        anchor: Vec3,
+        text: String,
+        at: Vec3,
+    },
     /// Protractor: center placed, choosing the baseline.
-    ProtBase { center: Vec3, n: Vec3 },
+    ProtBase {
+        center: Vec3,
+        n: Vec3,
+    },
     /// Protractor: choosing the guide's angle from the baseline.
-    ProtAngle { center: Vec3, n: Vec3, ref_dir: Vec3, angle: f32 },
-    BoxSelect { start: Pos2 },
+    ProtAngle {
+        center: Vec3,
+        n: Vec3,
+        ref_dir: Vec3,
+        angle: f32,
+    },
+    BoxSelect {
+        start: Pos2,
+    },
     Erase,
-    Place { def: DefId },
+    Place {
+        def: DefId,
+    },
     /// Solid tools: the first solid has been picked.
-    SolidFirst { first: Id },
+    SolidFirst {
+        first: Id,
+    },
 }
 
 /// A full undo point: the document plus the open edit context.
@@ -300,6 +394,9 @@ struct SceneOut {
     tex: std::collections::BTreeMap<usize, Vec<f32>>,
 }
 
+/// Screen-space segments, arrow tips (tip, from) and label center of an annotation.
+type ScreenParts = (Vec<(Pos2, Pos2)>, Vec<(Pos2, Pos2)>, Option<Pos2>);
+
 /// SketchUp's back-face color, shown on the back of unpainted faces.
 const BACK_COLOR: [f32; 3] = [0.62, 0.66, 0.78];
 
@@ -342,8 +439,7 @@ struct CamAnim {
     t0: Option<f64>,
 }
 
-const BOX_EDGES: [(usize, usize); 12] =
-    [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)];
+const BOX_EDGES: [(usize, usize); 12] = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -418,9 +514,7 @@ fn arc_points_2pt(p0: Vec3, p1: Vec3, n: Vec3, bulge: f32, segs: usize) -> Vec<V
 /// Points of an arc around `center` starting at `start`, sweeping `angle` around `n`.
 fn arc_points_center(center: Vec3, start: Vec3, n: Vec3, angle: f32, segs: usize) -> Vec<Vec3> {
     let v0 = start - center;
-    (0..=segs)
-        .map(|i| center + glam::Quat::from_axis_angle(n, angle * i as f32 / segs as f32) * v0)
-        .collect()
+    (0..=segs).map(|i| center + glam::Quat::from_axis_angle(n, angle * i as f32 / segs as f32) * v0).collect()
 }
 
 fn circle_points(center: Vec3, n: Vec3, radius_vec: Vec3, segs: usize) -> Vec<Vec3> {
@@ -601,11 +695,7 @@ impl App {
     /// Inference axes of the edit context (a rotated group has rotated axes).
     fn axes(&self) -> [Vec3; 3] {
         let m = self.ctx_xf;
-        [
-            m.x_axis.truncate().normalize_or(Vec3::X),
-            m.y_axis.truncate().normalize_or(Vec3::Y),
-            m.z_axis.truncate().normalize_or(Vec3::Z),
-        ]
+        [m.x_axis.truncate().normalize_or(Vec3::X), m.y_axis.truncate().normalize_or(Vec3::Y), m.z_axis.truncate().normalize_or(Vec3::Z)]
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -951,7 +1041,7 @@ impl App {
 
     /// Screen-space parts of an annotation: segments, arrow tips (tip, from)
     /// and the label center.
-    fn annotation_screen(&self, rect: Rect, a: &Annotation) -> (Vec<(Pos2, Pos2)>, Vec<(Pos2, Pos2)>, Option<Pos2>) {
+    fn annotation_screen(&self, rect: Rect, a: &Annotation) -> ScreenParts {
         let proj = |p: Vec3| self.cam.project(rect, p);
         let segs: Vec<(Pos2, Pos2)> = a.segments().into_iter().filter_map(|(p, q)| Some((proj(p)?, proj(q)?))).collect();
         let mut arrows = Vec::new();
@@ -1549,11 +1639,7 @@ impl App {
     }
 
     fn save_as(&mut self) {
-        if let Some(p) = rfd::FileDialog::new()
-            .add_filter("OpenSketch model", &["osk"])
-            .set_file_name("model.osk")
-            .save_file()
-        {
+        if let Some(p) = rfd::FileDialog::new().add_filter("OpenSketch model", &["osk"]).set_file_name("model.osk").save_file() {
             self.save_to(p);
         }
     }
@@ -1604,8 +1690,7 @@ impl App {
 
     fn export(&mut self, stl: bool) {
         let (name, ext) = if stl { ("STL", "stl") } else { ("Wavefront OBJ", "obj") };
-        let Some(p) = rfd::FileDialog::new().add_filter(name, &[ext]).set_file_name(format!("model.{ext}")).save_file()
-        else {
+        let Some(p) = rfd::FileDialog::new().add_filter(name, &[ext]).set_file_name(format!("model.{ext}")).save_file() else {
             return;
         };
         self.sync();
@@ -1803,7 +1888,13 @@ impl App {
             }
             State::PushPull { face, n, dist, .. } => {
                 if let Some(l) = value {
-                    let sign = if dist.abs() > EPS { dist.signum() } else if n.z < -0.9 { -1.0 } else { 1.0 };
+                    let sign = if dist.abs() > EPS {
+                        dist.signum()
+                    } else if n.z < -0.9 {
+                        -1.0
+                    } else {
+                        1.0
+                    };
                     self.finish_pushpull(face, l * sign);
                 }
             }
@@ -2035,11 +2126,7 @@ impl App {
             return;
         }
         let mut cutters = self.model.cut_faces(if with_model { &all } else { &sel_faces });
-        let insts: Vec<Id> = if with_model {
-            self.doc.defs[&self.ctx_def()].instances.keys().copied().collect()
-        } else {
-            self.sel.insts()
-        };
+        let insts: Vec<Id> = if with_model { self.doc.defs[&self.ctx_def()].instances.keys().copied().collect() } else { self.sel.insts() };
         for i in insts {
             if let Some(mesh) = self.doc.instance_world_mesh(&self.path, i) {
                 let ids: Vec<Id> = mesh.faces.keys().copied().collect();
@@ -2053,11 +2140,8 @@ impl App {
             added = m.intersect_faces(&targets, &cutters);
             added > 0
         });
-        self.status = if added > 0 {
-            format!("Intersect Faces: added {added} edge(s)")
-        } else {
-            "Intersect Faces: no intersections found".into()
-        };
+        self.status =
+            if added > 0 { format!("Intersect Faces: added {added} edge(s)") } else { "Intersect Faces: no intersections found".into() };
     }
 
     /// Follow Me: sweeps the clicked profile face along the selected path.
@@ -2200,10 +2284,8 @@ impl App {
             } else if let Some(f) = s.face {
                 self.sel.faces.insert(f);
                 self.sel.edges.extend(self.model.face_edges(f));
-            } else if let Some(i) = s.instance {
-                self.sel.insts.insert(i);
             } else {
-                return None;
+                self.sel.insts.insert(s.instance?);
             }
         }
         let (faces, edges, insts) = (self.sel.faces(), self.sel.edges(), self.sel.insts());
@@ -2268,9 +2350,7 @@ impl App {
                 let (n, on_face) = self.plane_for(s);
                 self.state = State::Circle { center: s.pos, edge: s.pos, n, on_face };
             }
-            (Tool::Circle | Tool::Polygon, State::Circle { center, edge, n, on_face }) => {
-                self.finish_circle(center, edge, n, on_face)
-            }
+            (Tool::Circle | Tool::Polygon, State::Circle { center, edge, n, on_face }) => self.finish_circle(center, edge, n, on_face),
 
             (Tool::Arc, State::Idle) => {
                 let (n, _) = self.plane_for(s);
@@ -2405,7 +2485,12 @@ impl App {
                 let on_something = s.hit
                     || matches!(
                         s.kind,
-                        SnapKind::Endpoint | SnapKind::Midpoint | SnapKind::OnEdge | SnapKind::GuidePoint | SnapKind::Intersection | SnapKind::OnGuide
+                        SnapKind::Endpoint
+                            | SnapKind::Midpoint
+                            | SnapKind::OnEdge
+                            | SnapKind::GuidePoint
+                            | SnapKind::Intersection
+                            | SnapKind::OnGuide
                     );
                 if on_something {
                     let text = self.default_text(s);
@@ -2633,9 +2718,7 @@ impl App {
                     let p0 = self.model.pos(f.outer[0]);
                     let p = ray_plane(o, d, p0, f.normal).unwrap_or(s.pos);
                     let pts = self.model.loop_points(&f.outer);
-                    let dmin = (0..pts.len())
-                        .map(|i| point_seg(p, pts[i], pts[(i + 1) % pts.len()]).0)
-                        .fold(f32::MAX, f32::min);
+                    let dmin = (0..pts.len()).map(|i| point_seg(p, pts[i], pts[(i + 1) % pts.len()]).0).fold(f32::MAX, f32::min);
                     *dist = if self.model.point_in_face(*face, p) { dmin } else { -dmin };
                     self.measure = self.units.format(dist.abs());
                 }
@@ -2818,7 +2901,8 @@ impl App {
 
     // ----- viewport -----------------------------------------------------------
 
-    fn from_point(&self) -> Option<Vec3> {
+    /// The point axis inference measures from (the tool's previous click).
+    fn inference_origin(&self) -> Option<Vec3> {
         match &self.state {
             State::Line { start } | State::Tape { start, .. } => Some(*start),
             State::DimSecond { a } => Some(*a),
@@ -2892,7 +2976,7 @@ impl App {
         }
 
         // Inference.
-        let from = self.from_point();
+        let from = self.inference_origin();
         let lock = if from.is_some() { self.lock_axis.or(self.shift_lock) } else { None };
         let picked = hover.map(|p| {
             let picker = self.picker(rect, &scene);
@@ -3129,7 +3213,11 @@ impl App {
             } else if let Some(k) = n.level {
                 let on_path = self.path.get(k) == Some(&iid);
                 let level = if on_path { Some(k + 1) } else { None };
-                self.walk(o, out, Node { def: inst.def, xf: base, level, owner: None, mat, faded: true, selected: false, hovered: false, tag });
+                self.walk(
+                    o,
+                    out,
+                    Node { def: inst.def, xf: base, level, owner: None, mat, faded: true, selected: false, hovered: false, tag },
+                );
             } else {
                 self.walk(o, out, Node { def: inst.def, xf: base, mat, tag, ..n });
             }
@@ -3267,7 +3355,11 @@ impl App {
             let col = if self.sel.edges.contains(&eid) {
                 [0.10, 0.35, 1.0, 1.0]
             } else if Some(eid) == hl_edge {
-                if self.tool == Tool::Eraser { [1.0, 0.45, 0.1, 1.0] } else { [0.3, 0.5, 1.0, 1.0] }
+                if self.tool == Tool::Eraser {
+                    [1.0, 0.45, 0.1, 1.0]
+                } else {
+                    [0.3, 0.5, 1.0, 1.0]
+                }
             } else if e.soft {
                 [0.55, 0.57, 0.62, 1.0]
             } else {
@@ -3374,10 +3466,10 @@ impl App {
 
         if self.show_axes {
             let len = (self.cam.distance * 50.0).max(1000.0);
-            for i in 0..3 {
+            for (i, ax) in AXES.iter().enumerate() {
                 let c = axis_rgb(i);
-                push_line(&mut out.lines, Vec3::ZERO, AXES[i] * len, [c[0], c[1], c[2], 0.9]);
-                push_line(&mut out.lines, Vec3::ZERO, -AXES[i] * len, [c[0], c[1], c[2], 0.3]);
+                push_line(&mut out.lines, Vec3::ZERO, *ax * len, [c[0], c[1], c[2], 0.9]);
+                push_line(&mut out.lines, Vec3::ZERO, -*ax * len, [c[0], c[1], c[2], 0.3]);
             }
         }
         if !self.path.is_empty() {
@@ -3409,7 +3501,7 @@ impl App {
                 None => {
                     // The image could not be decoded: fall back to the plain color.
                     let c = self.doc.material_color(Some(mat));
-                    for v in buf.chunks_exact_mut(FLOATS) {
+                    for v in buf.as_chunks_mut::<FLOATS>().0 {
                         for k in 0..3 {
                             v[6 + k] *= c[k];
                             v[12 + k] *= c[k];
@@ -3485,7 +3577,11 @@ impl App {
                 let col = if self.sel.guides.contains(&i) {
                     [0.10, 0.35, 1.0, 1.0]
                 } else if hover_ok && self.hover_guide == Some(i) {
-                    if self.tool == Tool::Eraser { [1.0, 0.45, 0.1, 1.0] } else { [0.3, 0.5, 1.0, 1.0] }
+                    if self.tool == Tool::Eraser {
+                        [1.0, 0.45, 0.1, 1.0]
+                    } else {
+                        [0.3, 0.5, 1.0, 1.0]
+                    }
                 } else {
                     [0.25, 0.25, 0.30, 0.9]
                 };
@@ -3664,7 +3760,11 @@ impl App {
                 let col = if self.sel.annots.contains(&i) {
                     Color32::from_rgb(25, 90, 240)
                 } else if hover_ok && self.hover_annot == Some(i) {
-                    if self.tool == Tool::Eraser { Color32::from_rgb(240, 110, 20) } else { Color32::from_rgb(90, 130, 240) }
+                    if self.tool == Tool::Eraser {
+                        Color32::from_rgb(240, 110, 20)
+                    } else {
+                        Color32::from_rgb(90, 130, 240)
+                    }
                 } else {
                     Color32::from_rgb(30, 40, 90)
                 };
@@ -3790,11 +3890,15 @@ impl App {
     fn hint(&self) -> &'static str {
         match (self.tool, &self.state) {
             (_, State::Place { .. }) => "Click to place the component (gluing components snap onto faces). Esc cancels.",
-            (Tool::Select, _) => "Click to select (Shift toggles, Ctrl adds). Drag L→R = window, R→L = crossing. Double-click a group to edit it.",
+            (Tool::Select, _) => {
+                "Click to select (Shift toggles, Ctrl adds). Drag L→R = window, R→L = crossing. Double-click a group to edit it."
+            }
             (Tool::Line, State::Line { .. }) => "Click end point or type a length + Enter. Arrow keys lock axes, Esc finishes.",
             (Tool::Line, _) => "Click to start a line. Closed coplanar loops become faces; lines across faces split them.",
             (Tool::Arc, State::ArcEnd { .. }) => "Click the arc's end point or type the chord length.",
-            (Tool::Arc, State::ArcBulge { .. }) => "Move to set the bulge (snaps to a half circle), click — or type a bulge, 5r for a radius, 12s for segments.",
+            (Tool::Arc, State::ArcBulge { .. }) => {
+                "Move to set the bulge (snaps to a half circle), click — or type a bulge, 5r for a radius, 12s for segments."
+            }
             (Tool::Arc, _) => "Click the arc's start point. Arcs connecting to edges close faces; arcs across a face split it.",
             (Tool::CenterArc | Tool::Pie, State::ArcStart { .. }) => "Click the start point (sets the radius) or type a radius.",
             (Tool::CenterArc | Tool::Pie, State::ArcSweep { .. }) => "Move to sweep (snaps to 15°), click — or type degrees.",
@@ -3810,7 +3914,9 @@ impl App {
             (Tool::Circle | Tool::Polygon, _) => "Click the center point. Type e.g. 32s to change the number of segments.",
             (Tool::PushPull, State::PushPull { .. }) => "Move to set the distance, then click — or type a distance.",
             (Tool::PushPull, _) => "Click a face to push or pull it. Type a value right after to adjust.",
-            (Tool::Move, State::Move { .. }) => "Click destination or type a distance. Ctrl toggles copy; after a copy type 3x or /3 for arrays.",
+            (Tool::Move, State::Move { .. }) => {
+                "Click destination or type a distance. Ctrl toggles copy; after a copy type 3x or /3 for arrays."
+            }
             (Tool::Move, _) => "Select geometry or groups (or hover them) and click a base point.",
             (Tool::Rotate, State::RotateCenter { .. }) => "Click a reference point to start the angle.",
             (Tool::Rotate, State::RotateAngle { .. }) => "Click to set the angle (snaps to 15°) or type degrees.",
@@ -3824,7 +3930,9 @@ impl App {
             (Tool::Tape, State::Tape { dir: Some(_), .. }) => {
                 "Move off the edge and click (or type a distance) for a parallel guide; click again in place for a guide on the edge."
             }
-            (Tool::Tape, State::Tape { .. }) => "Click the second point (or type a distance) to measure and add a guide point. Ctrl: measure only.",
+            (Tool::Tape, State::Tape { .. }) => {
+                "Click the second point (or type a distance) to measure and add a guide point. Ctrl: measure only."
+            }
             (Tool::Tape, _) => "Click a point to measure from, or an edge to make a parallel guide line. Ctrl toggles measure-only.",
             (Tool::Dimension, State::DimSecond { .. }) => "Click the second point.",
             (Tool::Dimension, State::DimOffset { .. }) => "Move to offset the dimension line, then click to place it.",
@@ -4049,9 +4157,11 @@ impl App {
                 ui.label(RichText::new(*group).small().weak());
                 for &t in *tools {
                     let text = RichText::new(format!("{}  {}", t.icon(), t.label())).size(14.0);
-                    let r = ui
-                        .add_sized([128.0, 26.0], egui::SelectableLabel::new(self.tool == t, text))
-                        .on_hover_text(format!("{} — shortcut: {}", t.label(), t.shortcut()));
+                    let r = ui.add_sized([128.0, 26.0], egui::SelectableLabel::new(self.tool == t, text)).on_hover_text(format!(
+                        "{} — shortcut: {}",
+                        t.label(),
+                        t.shortcut()
+                    ));
                     if r.clicked() {
                         self.set_tool(t);
                     }
@@ -4060,7 +4170,11 @@ impl App {
             }
             ui.label(RichText::new("GROUPS").small().weak());
             let has_sel = !self.sel.is_empty();
-            if ui.add_enabled(has_sel, egui::Button::new("📦  Make Group").min_size(Vec2::new(128.0, 24.0))).on_hover_text("Ctrl+G").clicked() {
+            if ui
+                .add_enabled(has_sel, egui::Button::new("📦  Make Group").min_size(Vec2::new(128.0, 24.0)))
+                .on_hover_text("Ctrl+G")
+                .clicked()
+            {
                 self.make_group(DefKind::Group);
             }
             if ui
@@ -4562,12 +4676,8 @@ impl eframe::App for App {
             }
             ctx.request_repaint();
         }
-        let name = self
-            .file
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Untitled".into());
+        let name =
+            self.file.as_ref().and_then(|p| p.file_name()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
         let title = format!("{}{} — OpenSketch", name, if self.dirty { " *" } else { "" });
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));

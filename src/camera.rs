@@ -29,11 +29,7 @@ impl Default for Camera {
 
 impl Camera {
     pub fn eye(&self) -> Vec3 {
-        let dir = Vec3::new(
-            self.pitch.cos() * self.yaw.cos(),
-            self.pitch.cos() * self.yaw.sin(),
-            self.pitch.sin(),
-        );
+        let dir = Vec3::new(self.pitch.cos() * self.yaw.cos(), self.pitch.cos() * self.yaw.sin(), self.pitch.sin());
         self.target + dir * self.distance
     }
 
@@ -91,10 +87,7 @@ impl Camera {
             return None;
         }
         let ndc = clip.truncate() / clip.w;
-        Some(Pos2::new(
-            rect.left() + (ndc.x + 1.0) * 0.5 * rect.width(),
-            rect.top() + (1.0 - ndc.y) * 0.5 * rect.height(),
-        ))
+        Some(Pos2::new(rect.left() + (ndc.x + 1.0) * 0.5 * rect.width(), rect.top() + (1.0 - ndc.y) * 0.5 * rect.height()))
     }
 
     pub fn orbit(&mut self, delta: Vec2) {

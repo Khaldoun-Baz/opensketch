@@ -48,9 +48,14 @@ impl Pattern {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Source {
-    Builtin { pattern: Pattern },
+    Builtin {
+        pattern: Pattern,
+    },
     /// Image file bytes (PNG or JPEG), base64-encoded.
-    Image { name: String, data: String },
+    Image {
+        name: String,
+        data: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -71,7 +76,7 @@ pub struct Pixels {
 impl Pixels {
     pub fn average(&self) -> [f32; 3] {
         let mut sum = [0f64; 3];
-        for px in self.rgba.chunks_exact(4) {
+        for px in self.rgba.as_chunks::<4>().0 {
             for k in 0..3 {
                 sum[k] += px[k] as f64;
             }
@@ -316,7 +321,7 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
         val[*c as usize] = i as u8;
     }
     let bytes: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);

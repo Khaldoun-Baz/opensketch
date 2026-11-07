@@ -72,15 +72,8 @@ impl Units {
     /// Bare numbers use the current display unit.
     pub fn parse(self, s: &str) -> Option<f32> {
         let s = s.trim().to_lowercase();
-        let suffixes: [(&str, f32); 7] = [
-            ("mm", 0.001),
-            ("cm", 0.01),
-            ("in", 0.0254),
-            ("ft", 0.3048),
-            ("m", 1.0),
-            ("\"", 0.0254),
-            ("'", 0.3048),
-        ];
+        let suffixes: [(&str, f32); 7] =
+            [("mm", 0.001), ("cm", 0.01), ("in", 0.0254), ("ft", 0.3048), ("m", 1.0), ("\"", 0.0254), ("'", 0.3048)];
         for (suf, f) in suffixes {
             if let Some(num) = s.strip_suffix(suf) {
                 return num.trim().parse::<f32>().ok().map(|v| v * f);

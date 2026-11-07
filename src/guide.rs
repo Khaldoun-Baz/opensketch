@@ -10,8 +10,13 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "kind")]
 pub enum Guide {
     /// Infinite line through `p` along the unit direction `d`.
-    Line { p: Vec3, d: Vec3 },
-    Point { p: Vec3 },
+    Line {
+        p: Vec3,
+        d: Vec3,
+    },
+    Point {
+        p: Vec3,
+    },
 }
 
 impl Guide {
@@ -72,8 +77,7 @@ pub fn line_segment(p: Vec3, d: Vec3, a: Vec3, b: Vec3) -> Option<Vec3> {
 
 /// Snap points where guide lines cross each other and the given edges.
 pub fn intersections(guides: &[Guide], segs: &[(Vec3, Vec3)]) -> Vec<Vec3> {
-    let lines: Vec<(Vec3, Vec3)> =
-        guides.iter().filter_map(|g| if let Guide::Line { p, d } = g { Some((*p, *d)) } else { None }).collect();
+    let lines: Vec<(Vec3, Vec3)> = guides.iter().filter_map(|g| if let Guide::Line { p, d } = g { Some((*p, *d)) } else { None }).collect();
     let mut out = Vec::new();
     for (i, &(p, d)) in lines.iter().enumerate() {
         for &(q, e) in &lines[i + 1..] {

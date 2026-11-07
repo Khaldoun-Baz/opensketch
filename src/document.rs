@@ -11,8 +11,8 @@
 use crate::annotation::Annotation;
 use crate::camera::Camera;
 use crate::guide::Guide;
-use crate::sun::Sun;
 use crate::model::{default_materials, Id, Material, Model, EPS};
+use crate::sun::Sun;
 use glam::{Mat3, Mat4, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -184,7 +184,16 @@ impl Document {
             glue: false,
             cut_opening: false,
         };
-        Self { defs: BTreeMap::from([(ROOT, root)]), materials: default_materials(), next_id: 1, guides: Vec::new(), tags: BTreeMap::new(), scenes: Vec::new(), annotations: Vec::new(), sun: Sun::default() }
+        Self {
+            defs: BTreeMap::from([(ROOT, root)]),
+            materials: default_materials(),
+            next_id: 1,
+            guides: Vec::new(),
+            tags: BTreeMap::new(),
+            scenes: Vec::new(),
+            annotations: Vec::new(),
+            sun: Sun::default(),
+        }
     }
 
     /// Wraps a mesh saved by an older version (no groups) into a document.
@@ -419,8 +428,7 @@ impl Document {
 
     /// True if `outer` is `target` or (transitively) contains an instance of it.
     pub fn contains_def(&self, outer: DefId, target: DefId) -> bool {
-        outer == target
-            || self.defs.get(&outer).is_some_and(|d| d.instances.values().any(|i| self.contains_def(i.def, target)))
+        outer == target || self.defs.get(&outer).is_some_and(|d| d.instances.values().any(|i| self.contains_def(i.def, target)))
     }
 
     /// Bounding box of a definition in its own coordinates, including children.
@@ -489,12 +497,8 @@ impl Document {
     /// Removes group definitions that are no longer placed anywhere.
     pub fn gc(&mut self) {
         loop {
-            let dead: Vec<DefId> = self
-                .defs
-                .iter()
-                .filter(|(id, d)| d.kind == DefKind::Group && self.instances_of(**id) == 0)
-                .map(|(id, _)| *id)
-                .collect();
+            let dead: Vec<DefId> =
+                self.defs.iter().filter(|(id, d)| d.kind == DefKind::Group && self.instances_of(**id) == 0).map(|(id, _)| *id).collect();
             if dead.is_empty() {
                 break;
             }
@@ -508,12 +512,8 @@ impl Document {
     pub fn purge_components(&mut self) -> usize {
         let mut removed = 0;
         loop {
-            let dead: Vec<DefId> = self
-                .defs
-                .iter()
-                .filter(|(id, d)| d.kind != DefKind::Root && self.instances_of(**id) == 0)
-                .map(|(id, _)| *id)
-                .collect();
+            let dead: Vec<DefId> =
+                self.defs.iter().filter(|(id, d)| d.kind != DefKind::Root && self.instances_of(**id) == 0).map(|(id, _)| *id).collect();
             if dead.is_empty() {
                 break;
             }
@@ -529,15 +529,7 @@ impl Document {
     /// component. `active` is the world-space working mesh of the context;
     /// call `sync` afterwards. Returns the new instance id.
     #[allow(clippy::too_many_arguments)]
-    pub fn make_group(
-        &mut self,
-        path: &[Id],
-        active: &mut Model,
-        faces: &[Id],
-        edges: &[Id],
-        insts: &[Id],
-        kind: DefKind,
-    ) -> Option<Id> {
+    pub fn make_group(&mut self, path: &[Id], active: &mut Model, faces: &[Id], edges: &[Id], insts: &[Id], kind: DefKind) -> Option<Id> {
         let ctx = self.ctx_def(path);
         let inv = self.ctx_xf(path).inverse();
         let mut all_edges: Vec<Id> = edges.to_vec();
@@ -739,10 +731,8 @@ impl Document {
         let Some(d) = self.defs.get(&def) else { return };
         let mut g = d.mesh.transformed(xf);
         let cuts = self.child_openings(def, xf);
-        let planes: Vec<(Vec3, Vec3, Vec<Vec<Vec3>>)> = cuts
-            .into_iter()
-            .filter_map(|(f, loops)| g.faces.get(&f).map(|face| (face.normal, g.pos(face.outer[0]), loops)))
-            .collect();
+        let planes: Vec<(Vec3, Vec3, Vec<Vec<Vec3>>)> =
+            cuts.into_iter().filter_map(|(f, loops)| g.faces.get(&f).map(|face| (face.normal, g.pos(face.outer[0]), loops))).collect();
         for (n, p0, loops) in planes {
             g.subtract_loops(n, p0, &loops);
         }
@@ -766,10 +756,7 @@ mod tests {
     fn box_model() -> Model {
         let mut m = Model::new();
         let f = m
-            .add_polygon(
-                &[Vec3::new(2.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0), Vec3::new(3.0, 1.0, 0.0), Vec3::new(2.0, 1.0, 0.0)],
-                None,
-            )
+            .add_polygon(&[Vec3::new(2.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0), Vec3::new(3.0, 1.0, 0.0), Vec3::new(2.0, 1.0, 0.0)], None)
             .unwrap();
         m.push_pull(f, -1.0);
         m
@@ -873,21 +860,15 @@ mod tests {
     fn wall() -> (Model, Id) {
         let mut m = Model::new();
         let w = m
-            .add_polygon(
-                &[Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 3.0)],
-                Some(-Vec3::Y),
-            )
+            .add_polygon(&[Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 3.0)], Some(-Vec3::Y))
             .unwrap();
         (m, w)
     }
 
     /// Draws an x0..x1 / z0..z1 rectangle on the wall and returns its face.
     fn on_wall(m: &mut Model, x0: f32, x1: f32, z0: f32, z1: f32) -> Id {
-        m.add_polygon(
-            &[Vec3::new(x0, 0.0, z0), Vec3::new(x1, 0.0, z0), Vec3::new(x1, 0.0, z1), Vec3::new(x0, 0.0, z1)],
-            Some(-Vec3::Y),
-        )
-        .unwrap()
+        m.add_polygon(&[Vec3::new(x0, 0.0, z0), Vec3::new(x1, 0.0, z0), Vec3::new(x1, 0.0, z1), Vec3::new(x0, 0.0, z1)], Some(-Vec3::Y))
+            .unwrap()
     }
 
     fn wall_faces(m: &Model) -> Vec<Id> {
@@ -1041,7 +1022,12 @@ mod tests {
         let c = doc.transform_instances(&[], &[a], Mat4::from_translation(Vec3::Y * 3.0), true)[0];
         assert_eq!(doc.instance(&[], c).unwrap().tag, Some(t));
 
-        doc.scenes.push(Scene { name: doc.next_scene_name(), camera: Camera::default(), hidden_tags: doc.hidden_tags(), style: SceneStyle::default() });
+        doc.scenes.push(Scene {
+            name: doc.next_scene_name(),
+            camera: Camera::default(),
+            hidden_tags: doc.hidden_tags(),
+            style: SceneStyle::default(),
+        });
         assert_eq!(doc.scenes[0].hidden_tags, vec![t]);
         doc.delete_tag(t);
         assert_eq!(doc.instance(&[], a).unwrap().tag, None);
