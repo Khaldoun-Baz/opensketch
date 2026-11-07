@@ -1,0 +1,24 @@
+[package]
+name = "opensketch"
+version = "0.1.0"
+edition = "2021"
+description = "A SketchUp-style push/pull 3D modeler written in Rust"
+license = "MIT"
+
+[dependencies]
+eframe = "0.31"
+glam = { version = "0.29", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+earcutr = "0.4"
+rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
