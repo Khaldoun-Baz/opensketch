@@ -74,6 +74,11 @@ saves the 3D view to `shot.png` and exits (add `OPENSKETCH_SHOT_NO_GROUND=1` to
 check ground shadows without a ground face). Handy for checking rendering
 changes without clicking through the UI.
 
+## Author
+
+Created and maintained by **Khaldoun Baz** ([@Khaldoun-Baz](https://github.com/Khaldoun-Baz)).
+See the [contributors graph](https://github.com/Khaldoun-Baz/opensketch/graphs/contributors) for everyone who has helped.
+
 ## Contributing
 
 Contributions are welcome: bug reports, feature ideas, docs and code. Read

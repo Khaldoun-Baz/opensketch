@@ -2,6 +2,7 @@
 name = "opensketch"
 version = "0.1.0"
 edition = "2021"
+authors = ["Khaldoun Baz <https://github.com/Khaldoun-Baz>"]
 description = "A SketchUp-style push/pull 3D modeler written in Rust"
 license = "MIT"
 repository = "https://github.com/Khaldoun-Baz/opensketch"
