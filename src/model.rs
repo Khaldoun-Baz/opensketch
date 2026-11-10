@@ -1230,6 +1230,37 @@ impl Model {
         self.recompute_normals();
     }
 
+    /// True if every vertex of the face lies in one plane.
+    fn is_flat(&self, face: &Face) -> bool {
+        let pts = self.loop_points(&face.outer);
+        let n = newell(&pts).normalize_or_zero();
+        let c = pts.iter().copied().sum::<Vec3>() / pts.len().max(1) as f32;
+        face.vertices().all(|v| (self.pos(v) - c).dot(n).abs() < 5e-4)
+    }
+
+    /// Auto-fold, as in SketchUp: faces that stopped being flat because some
+    /// of their vertices (`moved`) were moved are split into triangles along
+    /// new edges. Returns how many faces were folded.
+    pub fn autofold(&mut self, moved: &HashSet<Id>) -> usize {
+        let bent: Vec<Id> = self
+            .faces
+            .iter()
+            .filter(|(_, f)| f.vertices().any(|v| moved.contains(&v)) && !f.vertices().all(|v| moved.contains(&v)))
+            .filter(|(_, f)| !self.is_flat(f))
+            .map(|(i, _)| *i)
+            .collect();
+        for f in &bent {
+            let tris = self.triangulate_ids(*f);
+            let Some(face) = self.faces.remove(f) else { continue };
+            for t in tris {
+                let n = newell(&self.loop_points(&t));
+                let n = if n.dot(face.normal) < 0.0 { -n } else { n };
+                self.add_face_loops(t.to_vec(), vec![], n, face.material);
+            }
+        }
+        bent.len()
+    }
+
     /// A copy of the whole mesh transformed by `m` (ids are preserved).
     pub fn transformed(&self, m: Mat4) -> Model {
         let mut out = self.clone();
@@ -2300,6 +2331,28 @@ mod tests {
         assert!(m.faces[&f].normal.z < -0.99);
         assert_eq!(m.edges.len(), 4);
         assert!((m.face_area(f) - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn moving_a_corner_folds_the_faces_around_it() {
+        let mut m = Model::new();
+        let f = rect(&mut m, 0.0, 0.0, 2.0, 2.0, 0.0);
+        m.push_pull(f, -2.0);
+        let corner = m.find_vertex(Vec3::new(2.0, 2.0, 2.0)).unwrap();
+        let moved: HashSet<Id> = [corner].into_iter().collect();
+        // Sliding the corner along an edge keeps every face flat: nothing folds.
+        let mut slide = m.clone();
+        slide.apply_matrix(&moved, Mat4::from_translation(Vec3::new(0.0, 0.0, -0.5)));
+        assert_eq!(slide.autofold(&moved), 1, "only the top stops being flat");
+        // Lifting it bends the three faces that meet there.
+        m.apply_matrix(&moved, Mat4::from_translation(Vec3::new(0.5, 0.5, 1.0)));
+        assert_eq!(m.autofold(&moved), 3);
+        assert_eq!(m.faces.len(), 9);
+        assert_eq!(m.edges.len(), 15);
+        assert!(m.faces.values().all(|f| f.outer.len() == 3 || !f.vertices().any(|v| v == corner)));
+        assert!(m.faces.values().all(|f| m.is_flat(f)));
+        // Still a closed shell: every edge bounds exactly two faces.
+        assert!(m.edges.keys().all(|e| m.edge_faces(*e).len() == 2));
     }
 
     #[test]

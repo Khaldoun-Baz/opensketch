@@ -1,5 +1,6 @@
 //! Application shell: panels, tools, the Measurements box (VCB) and the 3D viewport.
 
+use crate::ai;
 use crate::annotation::{circumcenter, Annotation};
 use crate::camera::Camera;
 use crate::document::{box_corners, glue_frame, DefId, DefKind, Document, Scene, SceneStyle, ROOT};
@@ -25,6 +26,9 @@ use std::sync::{Arc, Mutex};
 // ---------------------------------------------------------------------------
 // Tools
 // ---------------------------------------------------------------------------
+
+/// Color of the "special" inferences (parallel, perpendicular, half circle, square).
+const MAGENTA: Color32 = Color32::from_rgb(200, 0, 160);
 
 const NOT_SOLID: &str = "That is not a solid: every edge must bound exactly two faces.";
 
@@ -511,6 +515,37 @@ fn arc_points_2pt(p0: Vec3, p1: Vec3, n: Vec3, bulge: f32, segs: usize) -> Vec<V
     pts
 }
 
+/// Bulges that make a 2-point arc from `p0` to `p1` (in the plane with normal
+/// `n`) continue smoothly from an edge that ends at `p0`, or into one that
+/// starts at `p1`.
+fn tangent_bulges(model: &Model, p0: Vec3, p1: Vec3, n: Vec3) -> Vec<f32> {
+    let chord = p1 - p0;
+    let l = chord.length();
+    if l < EPS {
+        return Vec::new();
+    }
+    let c = chord / l;
+    let m = n.cross(c);
+    let mut out = Vec::new();
+    for (p, at_start) in [(p0, true), (p1, false)] {
+        let Some(v) = model.find_vertex(p) else { continue };
+        for w in model.neighbors(v) {
+            // Direction of travel through the vertex: into p0, or out of p1.
+            let full = if at_start { p - model.pos(w) } else { model.pos(w) - p };
+            let t = in_plane(full, n);
+            if t.length() < full.length() * 0.9 || t.length() < EPS {
+                continue;
+            }
+            let t = t.normalize();
+            let a = if at_start { t.dot(m).atan2(t.dot(c)) } else { (-t.dot(m)).atan2(t.dot(c)) };
+            if a.abs() > 0.02 && a.abs() < 3.0 {
+                out.push(l / 2.0 * (a / 2.0).tan());
+            }
+        }
+    }
+    out
+}
+
 /// Points of an arc around `center` starting at `start`, sweeping `angle` around `n`.
 fn arc_points_center(center: Vec3, start: Vec3, n: Vec3, angle: f32, segs: usize) -> Vec<Vec3> {
     let v0 = start - center;
@@ -537,6 +572,7 @@ fn apply_to_model(m: &mut Model, t: &Targets, mat: Mat4, copy: bool) -> Option<(
         Some((nf, ne))
     } else {
         m.apply_matrix(&t.verts, mat);
+        m.autofold(&t.verts);
         None
     }
 }
@@ -560,6 +596,220 @@ fn seg_hits_rect(a: Pos2, b: Pos2, r: Rect) -> bool {
 
 fn stroke(width: f32, color: Color32) -> Stroke {
     Stroke::new(width, color)
+}
+
+// ---------------------------------------------------------------------------
+// AI Render window state
+// ---------------------------------------------------------------------------
+
+/// A clean frame of the viewport, filled in by the paint callback.
+type Capture = Arc<Mutex<Option<image::RgbaImage>>>;
+
+/// A render running on a background thread (its answer, and when it started).
+type RenderJob = (std::sync::mpsc::Receiver<Result<Vec<u8>, String>>, std::time::Instant);
+
+struct AiUi {
+    open: bool,
+    settings: ai::Settings,
+    /// What is on disk, to write the settings file only when something changed.
+    saved: ai::Settings,
+    description: String,
+    show_key: bool,
+    /// Set while the viewport is being captured for a render.
+    grab: Option<Capture>,
+    /// The render in progress and when it started.
+    job: Option<RenderJob>,
+    /// The picture that was sent.
+    source: Option<egui::TextureHandle>,
+    result: Option<(egui::TextureHandle, image::RgbaImage)>,
+    show_source: bool,
+    error: Option<String>,
+    note: Option<String>,
+}
+
+impl AiUi {
+    fn new() -> Self {
+        let settings = ai::settings_path().map(|p| ai::Settings::load_from(&p)).unwrap_or_default();
+        Self {
+            open: false,
+            saved: settings.clone(),
+            settings,
+            description: String::new(),
+            show_key: false,
+            grab: None,
+            job: None,
+            source: None,
+            result: None,
+            show_source: false,
+            error: None,
+            note: None,
+        }
+    }
+
+    /// The capture a paint callback should fill in, if one is wanted.
+    fn pending_capture(&self) -> Option<Capture> {
+        self.grab.clone().filter(|g| g.lock().unwrap().is_none())
+    }
+
+    fn save_settings(&mut self) {
+        if self.settings != self.saved {
+            if let Some(path) = ai::settings_path() {
+                if self.settings.save_to(&path).is_ok() {
+                    self.saved = self.settings.clone();
+                }
+            }
+        }
+    }
+}
+
+fn color_image(img: &image::RgbaImage) -> egui::ColorImage {
+    egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw())
+}
+
+// ---------------------------------------------------------------------------
+// Scripted input (self-test)
+// ---------------------------------------------------------------------------
+
+/// One line of an input script. Positions are window points.
+#[derive(Clone, Debug)]
+enum Step {
+    Move(Pos2),
+    Button(bool),
+    Text(String),
+    Key(Key, Modifiers),
+    Wait(u32),
+    /// Save a picture of the whole window.
+    Shot(PathBuf),
+    /// Write the model's counts and the tool state to a text file.
+    Dump(PathBuf),
+    Quit,
+}
+
+/// Plays mouse and keyboard input from a file, one step per frame, so tool
+/// handling can be tested without a person at the mouse:
+///
+/// ```text
+/// text r            # press R (Rectangle)
+/// move 500 400
+/// click             # = down, up
+/// drag 700 500      # = down, move there in steps, up
+/// key enter         # enter, escape, delete, up, down, left, right (+ctrl / +shift)
+/// wait 5            # frames
+/// shot out.png
+/// dump out.txt
+/// quit
+/// ```
+struct Script {
+    steps: std::collections::VecDeque<Step>,
+    pos: Pos2,
+    wait: u32,
+    /// A step that needs the app (shot, dump, quit), run from `update`.
+    pending: Option<Step>,
+    shot: Option<PathBuf>,
+}
+
+impl Script {
+    fn load(path: &std::path::Path) -> Option<Script> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let mut steps = std::collections::VecDeque::new();
+        let mut pos = Pos2::new(0.0, 0.0);
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            let (cmd, arg) = line.split_once(' ').map(|(c, a)| (c, a.trim())).unwrap_or((line, ""));
+            let xy = || {
+                let mut it = arg.split_whitespace().filter_map(|v| v.parse::<f32>().ok());
+                Some(Pos2::new(it.next()?, it.next()?))
+            };
+            match cmd {
+                "move" => {
+                    pos = xy()?;
+                    steps.push_back(Step::Move(pos));
+                }
+                "down" => steps.push_back(Step::Button(true)),
+                "up" => steps.push_back(Step::Button(false)),
+                "click" => steps.extend([Step::Button(true), Step::Button(false)]),
+                "drag" => {
+                    let to = xy()?;
+                    steps.push_back(Step::Button(true));
+                    for k in 1..=4 {
+                        steps.push_back(Step::Move(pos + (to - pos) * (k as f32 / 4.0)));
+                    }
+                    steps.push_back(Step::Button(false));
+                    pos = to;
+                }
+                "text" => steps.push_back(Step::Text(arg.to_string())),
+                "key" => {
+                    let mut mods = Modifiers::NONE;
+                    let mut key = None;
+                    for part in arg.split('+') {
+                        match part.trim() {
+                            "ctrl" => mods.ctrl = true,
+                            "shift" => mods.shift = true,
+                            "enter" => key = Some(Key::Enter),
+                            "escape" => key = Some(Key::Escape),
+                            "delete" => key = Some(Key::Delete),
+                            "up" => key = Some(Key::ArrowUp),
+                            "down" => key = Some(Key::ArrowDown),
+                            "left" => key = Some(Key::ArrowLeft),
+                            "right" => key = Some(Key::ArrowRight),
+                            other => key = Key::from_name(other),
+                        }
+                    }
+                    steps.push_back(Step::Key(key?, mods));
+                }
+                "wait" => steps.push_back(Step::Wait(arg.parse().ok()?)),
+                "shot" => steps.push_back(Step::Shot(PathBuf::from(arg))),
+                "dump" => steps.push_back(Step::Dump(PathBuf::from(arg))),
+                "quit" => steps.push_back(Step::Quit),
+                _ => {}
+            }
+        }
+        Some(Script { steps, pos: Pos2::new(0.0, 0.0), wait: 10, pending: None, shot: None })
+    }
+
+    /// Adds this frame's scripted input to what the window received.
+    fn feed(&mut self, raw: &mut egui::RawInput) {
+        if let Some(path) = &self.shot {
+            let image = raw.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            });
+            let Some(image) = image else { return };
+            if let Some(img) = image::RgbaImage::from_raw(image.width() as u32, image.height() as u32, image.as_raw().to_vec()) {
+                let _ = img.save(path);
+            }
+            self.shot = None;
+        }
+        if self.wait > 0 {
+            self.wait -= 1;
+            return;
+        }
+        if self.pending.is_some() {
+            return;
+        }
+        let modifiers = raw.modifiers;
+        match self.steps.pop_front() {
+            Some(Step::Move(p)) => {
+                self.pos = p;
+                raw.events.push(egui::Event::PointerMoved(p));
+            }
+            Some(Step::Button(pressed)) => {
+                raw.events.push(egui::Event::PointerButton { pos: self.pos, button: PointerButton::Primary, pressed, modifiers });
+            }
+            Some(Step::Text(t)) => raw.events.push(egui::Event::Text(t)),
+            Some(Step::Key(key, m)) => {
+                raw.modifiers = m;
+                raw.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m });
+            }
+            Some(Step::Wait(n)) => self.wait = n,
+            Some(step) => {
+                // Let the frame that follows the last input settle first.
+                self.wait = 2;
+                self.pending = Some(step);
+            }
+            None => {}
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -622,6 +872,28 @@ pub struct App {
     /// Screenshot self-test (OPENSKETCH_SHOT=file.png): frames drawn so far
     /// and whether the image was written.
     shot: Option<(PathBuf, u32, Arc<std::sync::atomic::AtomicBool>)>,
+    /// Where the left button went down in the viewport (drawing by dragging).
+    press: Option<Pos2>,
+    /// Where and when the last tool click landed, to tell a second click on
+    /// the same spot (and a double-click) from a new one.
+    last_click: Option<(Pos2, f64)>,
+    /// The Move/Rotate/Scale in progress picked what was under the cursor
+    /// itself, so the selection is dropped again when it ends.
+    auto_sel: bool,
+    /// Distance of the last Push/Pull (double-click repeats it).
+    last_pp: Option<f32>,
+    /// Points and edge directions the cursor passed over lately, for the
+    /// "From Point" and parallel / perpendicular inferences.
+    recent_pts: Vec<Vec3>,
+    recent_dirs: Vec<Vec3>,
+    /// The 2-point arc being drawn is tangent to an edge at one of its ends.
+    arc_tangent: bool,
+    /// Scripted input self-test (OPENSKETCH_SCRIPT=file).
+    script: Option<Script>,
+    ai: AiUi,
+    /// AI Render self-test (OPENSKETCH_SHOT_AI=file.png): where to save the
+    /// picture of the whole window, and how far the test has got.
+    ai_test: Option<(PathBuf, u32)>,
 }
 
 impl App {
@@ -676,12 +948,32 @@ impl App {
             cut_cache: RefCell::new(HashMap::new()),
             tex_cache: RefCell::new(HashMap::new()),
             shot: None,
+            press: None,
+            last_click: None,
+            auto_sel: false,
+            last_pp: None,
+            recent_pts: Vec::new(),
+            recent_dirs: Vec::new(),
+            arc_tangent: false,
+            script: std::env::var_os("OPENSKETCH_SCRIPT").and_then(|p| Script::load(std::path::Path::new(&p))),
+            ai: AiUi::new(),
+            ai_test: None,
         };
         if let Some(path) = std::env::var_os("OPENSKETCH_SHOT") {
             app.doc = demo_document(std::env::var_os("OPENSKETCH_SHOT_NO_GROUND").is_none());
             app.load_context();
             app.cam = Camera { target: Vec3::new(0.5, 1.0, 1.0), distance: 17.0, ..Camera::default() };
             app.shot = Some((PathBuf::from(path), 0, Arc::new(std::sync::atomic::AtomicBool::new(false))));
+        } else if std::env::var_os("OPENSKETCH_DEMO").is_some() || std::env::var_os("OPENSKETCH_SHOT_AI").is_some() {
+            // Start with the demo scene instead of an empty model (handy for trying things out).
+            app.doc = demo_document(true);
+            app.load_context();
+            app.cam = Camera { target: Vec3::new(0.5, 1.0, 1.0), distance: 17.0, ..Camera::default() };
+            if let Some(path) = std::env::var_os("OPENSKETCH_SHOT_AI") {
+                app.ai.open = true;
+                app.ai.description = "a small brick house with a wooden roof in a garden".into();
+                app.ai_test = Some((PathBuf::from(path), 0));
+            }
         }
         app
     }
@@ -732,6 +1024,9 @@ impl App {
         self.model = self.doc.load(&self.path);
         self.sel.clear();
         self.state = State::Idle;
+        self.auto_sel = false;
+        self.recent_pts.clear();
+        self.recent_dirs.clear();
     }
 
     fn sync(&mut self) {
@@ -777,6 +1072,7 @@ impl App {
     // ----- generic actions ------------------------------------------------
 
     fn set_tool(&mut self, t: Tool) {
+        self.end_auto_sel();
         self.tool = t;
         self.state = State::Idle;
         self.vcb.clear();
@@ -794,11 +1090,19 @@ impl App {
         self.lock_axis = None;
         if !matches!(self.state, State::Idle) {
             self.state = State::Idle;
+            self.end_auto_sel();
             self.status = "Cancelled".into();
         } else if !self.sel.is_empty() {
             self.sel.clear();
         } else if !self.path.is_empty() {
             self.exit_context();
+        }
+    }
+
+    /// Drops the selection a Move/Rotate/Scale made for itself.
+    fn end_auto_sel(&mut self) {
+        if std::mem::take(&mut self.auto_sel) {
+            self.sel.clear();
         }
     }
 
@@ -2177,9 +2481,24 @@ impl App {
         }
     }
 
+    /// Which way along a face's normal counts as pulling it out (+1 or -1).
+    /// A flat face lying on its own faces down, so pulling it up goes
+    /// against its normal; everywhere else out is along the normal.
+    fn pull_sign(&self, face: Id) -> f32 {
+        let Some(f) = self.model.faces.get(&face) else { return 1.0 };
+        let alone = self.model.face_edges(face).iter().all(|e| self.model.edge_faces(*e).len() <= 1);
+        if alone && f.normal.z < -0.9 {
+            -1.0
+        } else {
+            1.0
+        }
+    }
+
     fn finish_pushpull(&mut self, face: Id, d: f32) {
+        let pull = d * self.pull_sign(face);
         if let Some(before) = self.commit(|m| m.push_pull(face, d)) {
             self.last_op = Some(LastOp::PushPull { before, face, sign: d.signum() });
+            self.last_pp = Some(pull);
             self.measure = self.units.format(d.abs());
         }
         self.state = State::Idle;
@@ -2233,22 +2552,22 @@ impl App {
         let State::Move { t, delta, copy, .. } = self.state.clone() else { return };
         let delta = delta_override.unwrap_or(delta);
         self.state = State::Idle;
-        if delta.length() < EPS {
-            return;
+        if delta.length() > EPS {
+            self.measure = self.units.format(delta.length());
+            self.finish_transform(XOp::Move(delta), t, copy);
         }
-        self.measure = self.units.format(delta.length());
-        self.finish_transform(XOp::Move(delta), t, copy);
+        self.end_auto_sel();
     }
 
     fn finish_rotate(&mut self, angle_override: Option<f32>) {
         let State::RotateAngle { t, center, n, angle, .. } = self.state.clone() else { return };
         let a = angle_override.unwrap_or(angle);
         self.state = State::Idle;
-        if a.abs() < 1e-6 {
-            return;
+        if a.abs() > 1e-6 {
+            self.measure = format!("{:.1}°", a.to_degrees().abs());
+            self.finish_transform(XOp::Rotate { center, n, angle: a }, t, false);
         }
-        self.measure = format!("{:.1}°", a.to_degrees().abs());
-        self.finish_transform(XOp::Rotate { center, n, angle: a }, t, false);
+        self.end_auto_sel();
     }
 
     fn finish_scale(&mut self, factor_override: Option<Vec3>) {
@@ -2257,11 +2576,13 @@ impl App {
         self.state = State::Idle;
         if f.x.abs() < 1e-4 || f.y.abs() < 1e-4 || f.z.abs() < 1e-4 {
             self.status = "Scale factor cannot be zero".into();
+            self.end_auto_sel();
             return;
         }
         self.checkpoint();
         self.apply_transform(&t, about(center, Mat4::from_scale(f)), false);
         self.measure = format!("{:.3}, {:.3}, {:.3}", f.x, f.y, f.z);
+        self.end_auto_sel();
     }
 
     fn finish_offset(&mut self, face: Id, d: f32) {
@@ -2275,6 +2596,12 @@ impl App {
     /// Geometry an edit tool acts on: the selection, or the hovered entity.
     fn take_targets(&mut self, s: &Snap) -> Option<Targets> {
         if self.sel.is_empty() {
+            // Nothing is selected: act on what is under the cursor, for this
+            // one operation. Move grabs a single corner point to stretch.
+            if let (Tool::Move, SnapKind::Endpoint, Some(v)) = (self.tool, s.kind, s.vertex) {
+                let verts = [v].into_iter().collect();
+                return Some(Targets { verts, faces: vec![], edges: vec![], insts: vec![], guides: vec![], annots: vec![] });
+            }
             if let Some(e) = self.hover_edge {
                 self.sel.edges.insert(e);
             } else if let Some(a) = self.hover_annot {
@@ -2287,6 +2614,7 @@ impl App {
             } else {
                 self.sel.insts.insert(s.instance?);
             }
+            self.auto_sel = true;
         }
         let (faces, edges, insts) = (self.sel.faces(), self.sel.edges(), self.sel.insts());
         let (guides, annots) = (self.sel.guides(), self.sel.annots());
@@ -2310,6 +2638,21 @@ impl App {
             }
         }
         n
+    }
+
+    /// Geometry that is being dragged along right now (not while copying:
+    /// the original then stays where it is and can be snapped to).
+    fn moving(&self) -> Option<&Targets> {
+        match &self.state {
+            State::Move { t, copy: false, .. } | State::RotateAngle { t, .. } | State::Scale { t, .. } => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Bulges that make a 2-point arc leave `p0`, or arrive at `p1`, tangent
+    /// to an edge that ends there.
+    fn arc_tangent_bulges(&self, p0: Vec3, p1: Vec3, n: Vec3) -> Vec<f32> {
+        tangent_bulges(&self.model, p0, p1, n)
     }
 
     fn targets_bounds(&self, t: &Targets) -> Option<(Vec3, Vec3)> {
@@ -2642,6 +2985,14 @@ impl App {
                 if (b.abs() - l / 2.0).abs() < l * 0.04 {
                     b = l / 2.0 * b.signum(); // snap to a half circle
                 }
+                // Snap to an arc that continues an edge smoothly.
+                self.arc_tangent = false;
+                for t in self.arc_tangent_bulges(*p0, *p1, *n) {
+                    if (b - t).abs() < l.max(t.abs()) * 0.05 {
+                        b = t;
+                        self.arc_tangent = true;
+                    }
+                }
                 *bulge = b;
                 self.measure = self.units.format(b.abs());
             }
@@ -2674,13 +3025,21 @@ impl App {
                 }
             }
             State::PushPull { face, start, n, dist } => {
+                // The distance follows the cursor along the face's normal, or
+                // stops level with other geometry the cursor is on.
                 let own = self.model.faces.get(face).map(|f| f.vertices().collect::<HashSet<_>>()).unwrap_or_default();
-                let p = match (s.kind, s.vertex) {
-                    (SnapKind::Endpoint, Some(v)) if !own.contains(&v) => s.pos,
-                    (SnapKind::Endpoint, None) => s.pos,
-                    _ => closest_on_line_to_ray(*start, *n, o, d),
+                let free = (closest_on_line_to_ray(*start, *n, o, d) - *start).dot(*n);
+                let level = (s.pos - *start).dot(*n);
+                let own_edge = s.edge.and_then(|e| self.model.edges.get(&e)).is_some_and(|e| own.contains(&e.a) && own.contains(&e.b));
+                let inferred = match s.kind {
+                    SnapKind::Endpoint => s.vertex.is_none_or(|v| !own.contains(&v)),
+                    SnapKind::GuidePoint | SnapKind::Intersection => true,
+                    SnapKind::Midpoint | SnapKind::OnEdge => !own_edge,
+                    // Level with another face that is parallel to this one, when pulling its way.
+                    SnapKind::OnFace => s.face != Some(*face) && s.normal.is_some_and(|m| m.dot(*n).abs() > 0.9999) && level * free > 0.0,
+                    _ => false,
                 };
-                *dist = (p - *start).dot(*n);
+                *dist = if inferred && level.abs() > EPS { level } else { free };
                 self.measure = self.units.format(dist.abs());
             }
             State::Move { base, delta, .. } => {
@@ -2931,9 +3290,30 @@ impl App {
         let painter = ui.painter_at(rect);
         paint_background(&painter, rect);
 
+        if self.ai.pending_capture().is_some() {
+            // AI Render wants a clean frame: no selection, hover highlights or overlays.
+            let sel = std::mem::take(&mut self.sel);
+            let hover = (self.hover_face.take(), self.hover_edge.take(), self.hover_inst.take(), self.hover_guide.take());
+            let snap = self.snap.take();
+            self.paint_scene(&painter, rect);
+            self.sel = sel;
+            (self.hover_face, self.hover_edge, self.hover_inst, self.hover_guide) = hover;
+            self.snap = snap;
+            return;
+        }
+
         let mut scene = SceneOut::default();
         let opts = WalkOpts { active: &self.model, op: None, copy: false, render: false };
         self.walk(&opts, &mut scene, self.root_node());
+        if let Some(t) = self.moving() {
+            // What is being moved must not attract the cursor at its old place.
+            let model = &self.model;
+            scene.pick.retain(|(owner, _)| match owner {
+                Owner::Face(f) => !model.faces.get(f).is_some_and(|face| face.vertices().any(|v| t.verts.contains(&v))),
+                Owner::Instance(i) => !t.insts.contains(i),
+                Owner::Outside => true,
+            });
+        }
         if self.show_guides && !self.doc.guides.is_empty() {
             let mut segs: Vec<(Vec3, Vec3)> =
                 self.model.edges.values().filter(|e| !e.soft).map(|e| (self.model.pos(e.a), self.model.pos(e.b))).collect();
@@ -2987,6 +3367,26 @@ impl App {
             (snap, edge, o, d, guide)
         });
         self.snap = picked.as_ref().map(|x| x.0.clone());
+        if let Some(s) = &self.snap {
+            // Remember what the cursor passed over, for "From Point" and
+            // parallel / perpendicular inferences.
+            if matches!(s.kind, SnapKind::Endpoint | SnapKind::Midpoint | SnapKind::GuidePoint | SnapKind::Intersection)
+                && !self.recent_pts.iter().any(|p| p.distance(s.pos) < 1e-4)
+            {
+                self.recent_pts.push(s.pos);
+                if self.recent_pts.len() > 4 {
+                    self.recent_pts.remove(0);
+                }
+            }
+            if let (SnapKind::OnEdge, Some(d)) = (s.kind, s.line_dir) {
+                if d.length() > 0.5 && !self.recent_dirs.iter().any(|e| e.dot(d).abs() > 0.9999) {
+                    self.recent_dirs.push(d);
+                    if self.recent_dirs.len() > 2 {
+                        self.recent_dirs.remove(0);
+                    }
+                }
+            }
+        }
         self.hover_face = self.snap.as_ref().and_then(|s| s.face);
         self.hover_inst = self.snap.as_ref().and_then(|s| s.instance);
         self.hover_edge = picked.as_ref().and_then(|x| x.1);
@@ -3026,6 +3426,9 @@ impl App {
             axes: self.axes(),
             guides: if self.show_guides { &self.doc.guides } else { &[] },
             guide_pts: &scene.guide_pts,
+            skip: self.moving().map(|t| &t.verts),
+            recent: &self.recent_pts,
+            edge_dirs: &self.recent_dirs,
         }
     }
 
@@ -3034,6 +3437,9 @@ impl App {
         let drag_start = resp.drag_started_by(PointerButton::Primary);
         let dragging = resp.dragged_by(PointerButton::Primary);
         let drag_stop = resp.drag_stopped_by(PointerButton::Primary);
+        if !ui.input(|i| i.pointer.primary_down() || i.pointer.primary_released()) {
+            self.press = None;
+        }
 
         if let State::Place { def } = self.state {
             if clicked {
@@ -3116,8 +3522,62 @@ impl App {
                 }
             }
             _ => {
-                if clicked || drag_start || (drag_stop && !matches!(self.state, State::Idle)) {
-                    self.tool_click(s, mods);
+                // Tools act when the button goes down, as in SketchUp: click,
+                // move, click. Releasing the button far from where it went
+                // down also counts (press, drag, release). A wobble of the
+                // mouse during a click is neither.
+                let (pressed, released) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released()));
+                if pressed && resp.is_pointer_button_down_on() {
+                    self.press = Some(pos);
+                    let now = ui.input(|i| i.time);
+                    let busy = !matches!(self.state, State::Idle);
+                    let same_spot = busy && self.last_click.is_some_and(|(p, _)| p.distance(pos) < 4.0);
+                    let double = same_spot && self.last_click.is_some_and(|(_, t)| now - t < 0.45);
+                    let repeat_is_noise = matches!(
+                        self.tool,
+                        Tool::Line
+                            | Tool::Arc
+                            | Tool::CenterArc
+                            | Tool::Pie
+                            | Tool::Rectangle
+                            | Tool::Circle
+                            | Tool::Polygon
+                            | Tool::PushPull
+                            | Tool::Offset
+                            | Tool::Move
+                            | Tool::Rotate
+                            | Tool::Scale
+                            | Tool::Protractor
+                    );
+                    if same_spot && repeat_is_noise {
+                        // A second click on the same spot would only make
+                        // zero-size geometry. Push/Pull and Offset let go.
+                        if matches!(self.tool, Tool::PushPull | Tool::Offset) {
+                            self.state = State::Idle;
+                        }
+                        // Double-click a face: push/pull it by the last distance.
+                        if self.tool == Tool::PushPull && double {
+                            match (self.last_pp, s.face) {
+                                (Some(d), Some(f)) => {
+                                    let d = d * self.pull_sign(f);
+                                    self.finish_pushpull(f, d);
+                                    self.status = format!("Push/Pull repeated: {}", self.measure);
+                                }
+                                (None, Some(_)) => self.status = "Double-click repeats the last Push/Pull: there is none yet.".into(),
+                                _ => {}
+                            }
+                        }
+                    } else {
+                        self.tool_click(s, mods);
+                    }
+                    self.last_click = Some((pos, now));
+                } else if released {
+                    if let Some(down) = self.press.take() {
+                        if down.distance(pos) > 10.0 && !matches!(self.state, State::Idle) {
+                            self.tool_click(s, mods);
+                            self.last_click = Some((pos, ui.input(|i| i.time)));
+                        }
+                    }
                 }
             }
         }
@@ -3168,9 +3628,15 @@ impl App {
             self.emit_mesh(&d.mesh, &n, o.render, out, &cuts);
         }
         let Some(d) = self.doc.defs.get(&n.def) else { return };
-        let idle_hover = (matches!(self.state, State::Idle) && matches!(self.tool, Tool::Select | Tool::Paint | Tool::Eraser))
+        // Move / Rotate / Scale show what they would pick up when nothing is selected.
+        let picks = matches!(self.tool, Tool::Move | Tool::Rotate | Tool::Scale) && self.sel.is_empty();
+        let idle_hover = (matches!(self.state, State::Idle) && (picks || matches!(self.tool, Tool::Select | Tool::Paint | Tool::Eraser)))
             || self.tool.is_solid_tool();
         for (&iid, inst) in &d.instances {
+            // Instances being moved are not snapped to at their old place.
+            if active_here && !o.render && self.moving().is_some_and(|t| t.insts.contains(&iid)) {
+                continue;
+            }
             // Hidden tags hide instances, except the ones the user is editing inside.
             let editing = n.level.is_some_and(|k| self.path.get(k) == Some(&iid));
             if !editing && !self.doc.tag_visible(inst.tag) {
@@ -3292,12 +3758,19 @@ impl App {
 
     fn emit_active(&self, o: &WalkOpts, out: &mut SceneOut, cuts: &HashMap<Id, Vec<Vec<Vec3>>>, tag: Option<u32>) {
         let m = o.active;
+        // Move / Rotate / Scale show what they would pick up when nothing is
+        // selected: a corner point (the snap marker shows it), else an edge, else a face.
+        let picks =
+            matches!(self.tool, Tool::Move | Tool::Rotate | Tool::Scale) && matches!(self.state, State::Idle) && self.sel.is_empty();
+        let grabs_point = self.tool == Tool::Move && self.snap.as_ref().is_some_and(|s| s.kind == SnapKind::Endpoint && s.vertex.is_some());
         let hl_face = match (self.tool, &self.state) {
-            (Tool::PushPull | Tool::Paint | Tool::Offset | Tool::Select | Tool::Eraser, State::Idle) => self.hover_face,
+            (Tool::PushPull | Tool::Paint | Tool::Offset | Tool::Select | Tool::Eraser | Tool::FollowMe, State::Idle) => self.hover_face,
+            _ if picks && !grabs_point && self.hover_edge.is_none() => self.hover_face,
             _ => None,
         };
         let hl_edge = match self.tool {
             Tool::Select | Tool::Eraser => self.hover_edge,
+            _ if picks && !grabs_point => self.hover_edge,
             _ => None,
         };
         let alpha = if self.xray { 0.45 } else { 1.0 };
@@ -3455,7 +3928,15 @@ impl App {
         let mut out = SceneOut::default();
         self.walk(&opts, &mut out, self.root_node());
 
-        self.emit_guides(&mut out.lines);
+        // AI Render captures the model only: no guides, axes or edit-context box.
+        let capture = self.ai.pending_capture();
+        let clean = capture.is_some();
+        if clean && !self.ai.settings.edges {
+            out.lines.clear();
+        }
+        if !clean {
+            self.emit_guides(&mut out.lines);
+        }
 
         // Component being placed follows the cursor.
         if let (State::Place { def }, Some(s)) = (&self.state, &self.snap) {
@@ -3464,7 +3945,7 @@ impl App {
             self.walk(&opts, &mut out, node);
         }
 
-        if self.show_axes {
+        if self.show_axes && !clean {
             let len = (self.cam.distance * 50.0).max(1000.0);
             for (i, ax) in AXES.iter().enumerate() {
                 let c = axis_rgb(i);
@@ -3472,7 +3953,7 @@ impl App {
                 push_line(&mut out.lines, Vec3::ZERO, -*ax * len, [c[0], c[1], c[2], 0.3]);
             }
         }
-        if !self.path.is_empty() {
+        if !self.path.is_empty() && !clean {
             // Local axes and dashed-looking bounds of the open group/component.
             let origin = self.ctx_xf.transform_point3(Vec3::ZERO);
             let len = self.cam.distance * 0.25;
@@ -3530,7 +4011,8 @@ impl App {
             let headlight = (self.cam.eye() - self.cam.target).normalize() + Vec3::Z * 0.9 + self.cam.right() * 0.4;
             (headlight.normalize_or(Vec3::Z), None)
         };
-        let data = DrawData { tris, textured, lines: out.lines, view_proj: self.cam.view_proj(rect), light, xray: self.xray, shadow };
+        let data =
+            DrawData { tris, textured, lines: out.lines, view_proj: self.cam.view_proj(rect), light, xray: self.xray && !clean, shadow };
         // Screenshot self-test: capture once the scene has settled.
         let shot = self.shot.as_ref().filter(|s| s.1 == 8).map(|s| (s.0.clone(), s.2.clone()));
         if let Some(r) = &self.renderer {
@@ -3542,8 +4024,11 @@ impl App {
                     let vp = [v.left_px, v.from_bottom_px, v.width_px, v.height_px];
                     r.lock().unwrap().paint(painter.gl(), &data, vp, painter.intermediate_fbo());
                     if let Some((path, done)) = &shot {
-                        save_screenshot(painter.gl(), vp, path);
+                        let _ = read_viewport(painter.gl(), vp).save(path);
                         done.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    if let Some(capture) = &capture {
+                        *capture.lock().unwrap() = Some(read_viewport(painter.gl(), vp));
                     }
                 })),
             };
@@ -3638,6 +4123,7 @@ impl App {
                 if let Some(p) = snap_pos {
                     let color = match self.snap.as_ref().map(|s| s.kind) {
                         Some(SnapKind::Axis(i)) => axis_color(i),
+                        Some(SnapKind::Parallel | SnapKind::Perpendicular) => MAGENTA,
                         _ => parallel_axis(p - *start, &axes).map(axis_color).unwrap_or(ink),
                     };
                     polyline(&[*start, p], false, stroke(2.0, color));
@@ -3664,11 +4150,17 @@ impl App {
             }
             State::ArcBulge { p0, p1, n, bulge } => {
                 let half = (bulge.abs() - p0.distance(*p1) / 2.0).abs() < 1e-5;
-                let col = if half { Color32::from_rgb(200, 0, 160) } else { ink };
+                let (col, note) = if self.arc_tangent {
+                    (Color32::from_rgb(0, 170, 200), "Tangent at Vertex")
+                } else if half {
+                    (MAGENTA, "Half Circle")
+                } else {
+                    (ink, "")
+                };
                 polyline(&arc_points_2pt(*p0, *p1, *n, *bulge, self.arc_segments.max(2)), false, stroke(2.0, col));
                 dashed(*p0, *p1, Color32::GRAY);
-                if let (true, Some(h)) = (half, hover) {
-                    label(painter, h + Vec2::new(16.0, -30.0), "Half Circle", col);
+                if let (false, Some(h)) = (note.is_empty(), hover) {
+                    label(painter, h + Vec2::new(16.0, -30.0), note, col);
                 }
             }
             State::ArcStart { center, edge, n, .. } | State::ArcSweep { center, start: edge, n, .. } => {
@@ -3710,7 +4202,12 @@ impl App {
                 }
             }
             State::Move { base, delta, copy, .. } => {
-                dashed(*base, *base + *delta, ink);
+                let col = match self.snap.as_ref().map(|s| s.kind) {
+                    Some(SnapKind::Axis(i)) => axis_color(i),
+                    Some(SnapKind::Parallel | SnapKind::Perpendicular) => MAGENTA,
+                    _ => parallel_axis(*delta, &axes).map(axis_color).unwrap_or(ink),
+                };
+                dashed(*base, *base + *delta, col);
                 if *copy {
                     if let Some(h) = hover {
                         painter.text(h + Vec2::new(14.0, -18.0), Align2::LEFT_BOTTOM, "+ copy", FontId::proportional(13.0), ink);
@@ -3813,8 +4310,17 @@ impl App {
                     SnapKind::Axis(i) => (axis_color(i), true),
                     SnapKind::GuidePoint | SnapKind::Intersection => (Color32::from_rgb(0, 150, 0), true),
                     SnapKind::OnGuide => (Color32::from_rgb(110, 110, 120), true),
+                    SnapKind::Parallel | SnapKind::Perpendicular => (MAGENTA, true),
                     _ => (ink, false),
                 };
+                // "From Point": a dotted line to the point this position lines up with.
+                if let Some(r) = s.from_point {
+                    let c = parallel_axis(s.pos - r, &axes).map(axis_color).unwrap_or(Color32::from_rgb(90, 90, 100));
+                    if let Some(rp) = proj(r) {
+                        painter.extend(Shape::dotted_line(&[rp, p], c, 6.0, 1.5));
+                        painter.circle_filled(rp, 3.5, c);
+                    }
+                }
                 match s.kind {
                     SnapKind::Endpoint | SnapKind::Midpoint => {
                         painter.circle_filled(p, 5.0, col);
@@ -3839,6 +4345,7 @@ impl App {
                             let name = self.doc.instance(&self.path, i).map(|x| self.def_name(x.def)).unwrap_or_default();
                             format!("{} in {}", s.kind.label(), name)
                         }
+                        _ if s.from_point.is_some() => "From Point".to_string(),
                         _ => s.kind.label().to_string(),
                     };
                     label(painter, h + Vec2::new(16.0, 16.0), &text, col);
@@ -3897,7 +4404,7 @@ impl App {
             (Tool::Line, _) => "Click to start a line. Closed coplanar loops become faces; lines across faces split them.",
             (Tool::Arc, State::ArcEnd { .. }) => "Click the arc's end point or type the chord length.",
             (Tool::Arc, State::ArcBulge { .. }) => {
-                "Move to set the bulge (snaps to a half circle), click — or type a bulge, 5r for a radius, 12s for segments."
+                "Move to set the bulge (snaps to a half circle and to tangents), click — or type a bulge, 5r for a radius, 12s for segments."
             }
             (Tool::Arc, _) => "Click the arc's start point. Arcs connecting to edges close faces; arcs across a face split it.",
             (Tool::CenterArc | Tool::Pie, State::ArcStart { .. }) => "Click the start point (sets the radius) or type a radius.",
@@ -3912,12 +4419,14 @@ impl App {
             (Tool::Rectangle, _) => "Click the first corner (on the ground or on a face). Arrow keys pick a vertical plane.",
             (Tool::Circle | Tool::Polygon, State::Circle { .. }) => "Click to set the radius or type a value.",
             (Tool::Circle | Tool::Polygon, _) => "Click the center point. Type e.g. 32s to change the number of segments.",
-            (Tool::PushPull, State::PushPull { .. }) => "Move to set the distance, then click — or type a distance.",
-            (Tool::PushPull, _) => "Click a face to push or pull it. Type a value right after to adjust.",
+            (Tool::PushPull, State::PushPull { .. }) => {
+                "Move to set the distance, then click — or type a distance. Point at other geometry to stop level with it."
+            }
+            (Tool::PushPull, _) => "Click a face to push or pull it. Double-click a face to repeat the last distance.",
             (Tool::Move, State::Move { .. }) => {
                 "Click destination or type a distance. Ctrl toggles copy; after a copy type 3x or /3 for arrays."
             }
-            (Tool::Move, _) => "Select geometry or groups (or hover them) and click a base point.",
+            (Tool::Move, _) => "Click what to move: a corner point, an edge, a face or a group. Or select first, then click a base point.",
             (Tool::Rotate, State::RotateCenter { .. }) => "Click a reference point to start the angle.",
             (Tool::Rotate, State::RotateAngle { .. }) => "Click to set the angle (snaps to 15°) or type degrees.",
             (Tool::Rotate, _) => "Select geometry, then click the rotation center (aligns to the hovered face).",
@@ -4008,6 +4517,11 @@ impl App {
                     if ui.button("Export STL…").clicked() {
                         ui.close_menu();
                         self.export(true);
+                    }
+                    ui.separator();
+                    if ui.button("AI Render…").clicked() {
+                        ui.close_menu();
+                        self.ai.open = true;
                     }
                     ui.separator();
                     if ui.button("Exit").clicked() {
@@ -4529,6 +5043,343 @@ impl App {
         });
     }
 
+    // ----- AI Render ---------------------------------------------------------
+
+    /// Names of the materials used in the model, to tell the AI what things are made of.
+    fn used_materials(&self) -> Vec<String> {
+        let mut used: BTreeSet<usize> = self.model.faces.values().filter_map(|f| f.material).collect();
+        for d in self.doc.defs.values() {
+            used.extend(d.mesh.faces.values().filter_map(|f| f.material));
+            used.extend(d.instances.values().filter_map(|i| i.material));
+        }
+        used.into_iter().filter_map(|i| self.doc.materials.get(i)).map(|m| m.name.clone()).take(12).collect()
+    }
+
+    /// The service to use, with the key from `OPENSKETCH_AI_KEY` if none was typed.
+    fn ai_profile(&self) -> ai::Profile {
+        let mut p = self.ai.settings.profile();
+        if p.api_key.trim().is_empty() {
+            p.api_key = std::env::var("OPENSKETCH_AI_KEY").unwrap_or_default();
+        }
+        p
+    }
+
+    /// Render was clicked: ask the next frame for a clean picture of the view.
+    fn ai_begin(&mut self, ctx: &egui::Context) {
+        self.ai.error = None;
+        self.ai.note = None;
+        if self.ai.settings.provider.needs_key() && self.ai_profile().api_key.trim().is_empty() {
+            self.ai.error = Some("Enter your API key first.".into());
+            return;
+        }
+        self.ai.save_settings();
+        self.ai.grab = Some(Arc::new(Mutex::new(None)));
+        ctx.request_repaint();
+    }
+
+    /// The picture of the view arrived: send it off on a background thread.
+    fn ai_send(&mut self, ctx: &egui::Context, capture: image::RgbaImage) {
+        let s = &self.ai.settings;
+        let (kind, profile) = (s.provider, self.ai_profile());
+        let img = ai::prepare(&capture, s.max_side, kind);
+        let png = match ai::png_bytes(&img) {
+            Ok(png) => png,
+            Err(e) => {
+                self.ai.error = Some(format!("Could not prepare the picture: {e}"));
+                return;
+            }
+        };
+        let prompt = ai::compose_prompt(kind, ai::style(&s.style), &self.ai.description, &self.used_materials(), s.fidelity, &s.avoid);
+        let job = ai::Job { png, width: img.width(), height: img.height(), prompt, negative: s.avoid.clone(), fidelity: s.fidelity };
+        self.ai.source = Some(ctx.load_texture("ai-source", color_image(&img), egui::TextureOptions::LINEAR));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let wake = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(ai::render(kind, &profile, &job));
+            wake.request_repaint();
+        });
+        self.ai.job = Some((rx, std::time::Instant::now()));
+    }
+
+    fn ai_poll(&mut self, ctx: &egui::Context) {
+        let captured = self.ai.grab.as_ref().and_then(|g| g.lock().unwrap().take());
+        if let Some(img) = captured {
+            self.ai.grab = None;
+            self.ai_send(ctx, img);
+        } else if self.ai.grab.is_some() {
+            ctx.request_repaint();
+        }
+        let Some((rx, _)) = &self.ai.job else { return };
+        let answer = match rx.try_recv() {
+            Ok(answer) => answer,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("The render stopped unexpectedly.".to_string()),
+        };
+        self.ai.job = None;
+        match answer.and_then(|bytes| {
+            image::load_from_memory(&bytes)
+                .map_err(|_| "The service sent an image OpenSketch can't open (only PNG and JPEG work).".to_string())
+        }) {
+            Ok(img) => {
+                let img = img.to_rgba8();
+                let tex = ctx.load_texture("ai-result", color_image(&img), egui::TextureOptions::LINEAR);
+                self.ai.result = Some((tex, img));
+                self.ai.show_source = false;
+            }
+            Err(e) => self.ai.error = Some(e),
+        }
+    }
+
+    /// Scripted input self-test: the steps that need the app itself.
+    fn run_script(&mut self, ctx: &egui::Context) {
+        let Some(script) = &mut self.script else { return };
+        ctx.request_repaint();
+        if script.wait > 0 {
+            return;
+        }
+        match script.pending.take() {
+            Some(Step::Shot(path)) => {
+                script.shot = Some(path);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            }
+            Some(Step::Dump(path)) => {
+                let m = &self.model;
+                let state = match &self.state {
+                    State::Idle => "idle",
+                    _ => "busy",
+                };
+                let mut text = format!(
+                    "vertices {}\nedges {}\nfaces {}\ninstances {}\nselected {}\nstate {}\nmeasure {}\n",
+                    m.vertices.len(),
+                    m.edges.len(),
+                    m.faces.len(),
+                    self.doc.defs[&self.ctx_def()].instances.len(),
+                    self.sel.faces.len() + self.sel.edges.len() + self.sel.insts.len(),
+                    state,
+                    self.measure
+                );
+                text += &format!("status {}\n", self.status);
+                if let Some((lo, hi)) = m.bounds() {
+                    text += &format!("bounds {:.3} {:.3} {:.3} .. {:.3} {:.3} {:.3}\n", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+                }
+                let _ = std::fs::write(path, text);
+            }
+            Some(Step::Quit) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            _ => {}
+        }
+    }
+
+    /// AI Render self-test: clicks Render once the window has settled, waits
+    /// for the answer, saves a picture of the whole window and exits.
+    fn ai_self_test(&mut self, ctx: &egui::Context) {
+        let Some((path, stage)) = self.ai_test.clone() else { return };
+        ctx.request_repaint();
+        let busy = self.ai.job.is_some() || self.ai.grab.is_some();
+        let next = match stage {
+            10 => {
+                self.ai_begin(ctx);
+                11
+            }
+            11 if busy => 11,
+            20 => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                21
+            }
+            21.. => {
+                let shot = ctx.input(|i| {
+                    i.events.iter().find_map(|e| match e {
+                        egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                        _ => None,
+                    })
+                });
+                if let Some(shot) = shot {
+                    if let Some(img) = image::RgbaImage::from_raw(shot.width() as u32, shot.height() as u32, shot.as_raw().to_vec()) {
+                        let _ = img.save(&path);
+                    }
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                stage
+            }
+            _ => stage + 1,
+        };
+        self.ai_test = Some((path, next));
+    }
+
+    fn ai_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.ai.open;
+        egui::Window::new("AI Render").open(&mut open).default_size([940.0, 600.0]).min_width(680.0).min_height(420.0).show(ctx, |ui| {
+            // Controls on the left, the picture fills the rest; both take the
+            // window's full height so resizing the window resizes the picture.
+            let height = ui.available_height();
+            let column = egui::Layout::top_down(egui::Align::Min);
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(Vec2::new(300.0, height), column, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.ai_controls(ui));
+                });
+                ui.separator();
+                ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), height), column, |ui| self.ai_preview(ui));
+            });
+        });
+        if !open {
+            self.ai.save_settings();
+        }
+        self.ai.open = open;
+    }
+
+    fn ai_controls(&mut self, ui: &mut egui::Ui) {
+        let busy = self.ai.job.is_some() || self.ai.grab.is_some();
+        let (mut go, mut cancel) = (false, false);
+        let AiUi { settings, description, show_key, job, error, note, .. } = &mut self.ai;
+
+        ui.label(RichText::new("Service").strong());
+        egui::ComboBox::from_id_salt("ai_service").width(280.0).selected_text(settings.provider.label()).show_ui(ui, |ui| {
+            for k in ai::Kind::ALL {
+                ui.selectable_value(&mut settings.provider, k, k.label());
+            }
+        });
+        let kind = settings.provider;
+        let p = settings.profile_mut();
+        ui.add_space(4.0);
+        ui.label(if kind.needs_key() { "API key" } else { "Password (only if you set one)" });
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut p.api_key).password(!*show_key).desired_width(215.0));
+            ui.checkbox(show_key, "Show");
+        });
+        let (label, url) = kind.key_page();
+        ui.hyperlink_to(RichText::new(label).small(), url);
+        ui.collapsing("Connection (advanced)", |ui| {
+            ui.label("Address");
+            ui.add(egui::TextEdit::singleline(&mut p.base_url).desired_width(f32::INFINITY));
+            ui.label("Model");
+            ui.add(egui::TextEdit::singleline(&mut p.model).hint_text(kind.model_hint()).desired_width(f32::INFINITY));
+            ui.label("Extra options (name=value, one per line)");
+            ui.add(egui::TextEdit::multiline(&mut p.extra).desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+            if ui.button("Reset to defaults").clicked() {
+                let key = std::mem::take(&mut p.api_key);
+                *p = ai::Profile { api_key: key, ..kind.default_profile() };
+            }
+        });
+        let sent_to = ai::host(&p.base_url);
+
+        ui.separator();
+        ui.label(RichText::new("Describe the scene").strong());
+        ui.add(
+            egui::TextEdit::multiline(description)
+                .desired_rows(3)
+                .desired_width(f32::INFINITY)
+                .hint_text("e.g. a small brick house with a wooden roof in a garden"),
+        );
+        ui.add_space(4.0);
+        ui.label(RichText::new("Style").strong());
+        egui::ComboBox::from_id_salt("ai_style").width(280.0).selected_text(ai::style(&settings.style).name).show_ui(ui, |ui| {
+            for s in ai::STYLES {
+                ui.selectable_value(&mut settings.style, s.name.to_string(), s.name);
+            }
+        });
+        ui.add_space(4.0);
+        ui.label(RichText::new("Keep my model's shape").strong());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Loosely").weak());
+            ui.add(egui::Slider::new(&mut settings.fidelity, 0.0..=1.0).show_value(false));
+            ui.label(RichText::new("Exactly").weak());
+        });
+        ui.collapsing("More options", |ui| {
+            ui.label("Avoid");
+            ui.add(egui::TextEdit::multiline(&mut settings.avoid).desired_rows(3).desired_width(f32::INFINITY));
+            if ui.small_button("Reset the list").clicked() {
+                settings.avoid = ai::DEFAULT_AVOID.to_string();
+            }
+            ui.horizontal(|ui| {
+                ui.label("Picture size");
+                egui::ComboBox::from_id_salt("ai_size").selected_text(format!("{} px", settings.max_side)).show_ui(ui, |ui| {
+                    for side in [1024, 1536, 2048] {
+                        ui.selectable_value(&mut settings.max_side, side, format!("{side} px"));
+                    }
+                });
+            });
+            ui.checkbox(&mut settings.edges, "Send the model's edge lines");
+            ui.checkbox(&mut settings.remember_keys, "Remember API keys on this computer");
+            if let Some(path) = ai::settings_path() {
+                ui.label(RichText::new(format!("Kept as plain text in {}", path.display())).weak().small());
+            }
+        });
+
+        ui.separator();
+        ui.label(RichText::new(format!("A picture of your current view and your description are sent to {sent_to}.")).weak().small());
+        ui.add_space(4.0);
+        if ui.add_enabled(!busy, egui::Button::new(RichText::new("Render").strong()).min_size(Vec2::new(284.0, 32.0))).clicked() {
+            go = true;
+        }
+        if let Some((_, started)) = job {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(format!("Rendering… {} s", started.elapsed().as_secs()));
+                cancel = ui.small_button("Cancel").clicked();
+            });
+            ui.label(RichText::new("This can take a minute or two.").weak().small());
+        }
+        if let Some(e) = error {
+            ui.colored_label(Color32::from_rgb(190, 40, 30), e.as_str());
+        }
+        if let Some(n) = note {
+            ui.label(RichText::new(n.as_str()).weak());
+        }
+        if cancel {
+            // The answer, if it still comes, is ignored.
+            self.ai.job = None;
+        }
+        if go {
+            self.ai_begin(ui.ctx());
+        }
+    }
+
+    fn ai_preview(&mut self, ui: &mut egui::Ui) {
+        let mut save = false;
+        if self.ai.result.is_some() {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.ai.show_source, false, "AI render");
+                ui.selectable_value(&mut self.ai.show_source, true, "Your view");
+                save = ui.button("Save image…").clicked();
+            });
+            ui.add_space(4.0);
+        }
+        let shown = match (&self.ai.result, &self.ai.source) {
+            (Some((tex, _)), _) if !self.ai.show_source => Some(tex),
+            (_, source) => source.as_ref(),
+        };
+        let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+        match shown {
+            Some(tex) => {
+                let size = tex.size_vec2();
+                let scale = (rect.width() / size.x).min(rect.height() / size.y).max(0.01);
+                egui::Image::new((tex.id(), size)).paint_at(ui, Rect::from_center_size(rect.center(), size * scale));
+            }
+            None => {
+                let hint = "Set up the view in the main window, then click Render.\nThe picture appears here.";
+                ui.painter().text(rect.center(), Align2::CENTER_CENTER, hint, FontId::proportional(14.0), ui.visuals().weak_text_color());
+            }
+        }
+        if save {
+            self.ai_save_image();
+        }
+    }
+
+    fn ai_save_image(&mut self) {
+        let Some((_, img)) = &self.ai.result else { return };
+        let Some(path) = rfd::FileDialog::new().add_filter("PNG image", &["png"]).set_file_name("render.png").save_file() else { return };
+        let path = if path.extension().is_some() { path } else { path.with_extension("png") };
+        match img.save(&path) {
+            Ok(()) => {
+                self.ai.error = None;
+                self.ai.note = Some(format!("Saved {}", path.display()));
+            }
+            Err(e) => self.ai.error = Some(format!("Could not save the image: {e}")),
+        }
+    }
+
     fn help_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_help;
         egui::Window::new("Keyboard shortcuts").open(&mut open).resizable(false).show(ctx, |ui| {
@@ -4540,6 +5391,8 @@ impl App {
                         ("Follow Me", "Select a path (or a face), then click the profile face"),
                         ("Intersect Faces", "Edit menu: cut edges where faces/groups cross"),
                         ("P / F", "Push/Pull / Offset"),
+                        ("Double-click (Push/Pull)", "Repeat the last distance on that face"),
+                        ("Click or drag", "Tools work click-move-click, or press-drag-release"),
                         ("M / Q / S", "Move / Rotate / Scale"),
                         ("E / B / T", "Eraser / Paint Bucket / Tape Measure"),
                         ("Protractor", "Click center → baseline → angle (type 30 or a slope 1:2)"),
@@ -4576,8 +5429,8 @@ impl App {
     }
 }
 
-/// Reads the 3D viewport back and writes it as a PNG (screenshot self-test).
-fn save_screenshot(gl: &glow::Context, vp: [i32; 4], path: &std::path::Path) {
+/// Reads the 3D viewport back as an image (screenshot self-test, AI Render).
+fn read_viewport(gl: &glow::Context, vp: [i32; 4]) -> image::RgbaImage {
     use eframe::glow::HasContext;
     let (w, h) = (vp[2].max(1), vp[3].max(1));
     let mut buf = vec![0u8; (w * h * 4) as usize];
@@ -4586,9 +5439,7 @@ fn save_screenshot(gl: &glow::Context, vp: [i32; 4], path: &std::path::Path) {
     }
     let row = (w * 4) as usize;
     let flipped: Vec<u8> = buf.chunks_exact(row).rev().flatten().copied().collect();
-    if let Some(img) = image::RgbaImage::from_raw(w as u32, h as u32, flipped) {
-        let _ = img.save(path);
-    }
+    image::RgbaImage::from_raw(w as u32, h as u32, flipped).unwrap_or_else(|| image::RgbaImage::new(1, 1))
 }
 
 /// A small textured, sunlit scene for the screenshot self-test.
@@ -4676,6 +5527,12 @@ impl eframe::App for App {
         if self.show_help {
             self.help_window(ctx);
         }
+        self.ai_poll(ctx);
+        if self.ai.open {
+            self.ai_window(ctx);
+        }
+        self.ai_self_test(ctx);
+        self.run_script(ctx);
         if let Some(shot) = &mut self.shot {
             shot.1 += 1;
             if shot.2.load(std::sync::atomic::Ordering::SeqCst) {
@@ -4689,6 +5546,12 @@ impl eframe::App for App {
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
+        }
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some(script) = &mut self.script {
+            script.feed(raw_input);
         }
     }
 
@@ -4713,6 +5576,39 @@ fn parse_angle(text: &str) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arcs_find_the_bulge_that_continues_an_edge() {
+        // An edge arriving at the origin along +X, then an arc on to (1, 1).
+        let mut m = Model::new();
+        let a = m.add_vertex(Vec3::new(-1.0, 0.0, 0.0));
+        let o = m.add_vertex(Vec3::ZERO);
+        m.add_edge(a, o);
+        let (p0, p1) = (Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0));
+        let bulges = tangent_bulges(&m, p0, p1, Vec3::Z);
+        assert_eq!(bulges.len(), 1);
+        // A quarter circle of radius 1 around (0, 1): sagitta 1 - cos 45°.
+        assert!((bulges[0].abs() - (1.0 - 0.5f32.sqrt())).abs() < 1e-4, "{bulges:?}");
+        let pts = arc_points_2pt(p0, p1, Vec3::Z, bulges[0], 64);
+        assert!(pts.iter().all(|p| (p.distance(Vec3::Y) - 1.0).abs() < 1e-3));
+        assert!((pts[1] - pts[0]).normalize().dot(Vec3::X) > 0.999, "leaves along the edge");
+        // The same at the far end: an edge leaving (1, 1) along +Y.
+        let mut m = Model::new();
+        let e = m.add_vertex(p1);
+        let f = m.add_vertex(Vec3::new(1.0, 2.0, 0.0));
+        m.add_edge(e, f);
+        let bulges = tangent_bulges(&m, p0, p1, Vec3::Z);
+        assert_eq!(bulges.len(), 1);
+        let pts = arc_points_2pt(p0, p1, Vec3::Z, bulges[0], 64);
+        assert!((pts[64] - pts[63]).normalize().dot(Vec3::Y) > 0.999, "arrives along the edge");
+        // An edge that continues the chord in a straight line gives no arc; nor does none.
+        let mut m = Model::new();
+        let a = m.add_vertex(Vec3::new(-1.0, -1.0, 0.0));
+        let o = m.add_vertex(Vec3::ZERO);
+        m.add_edge(a, o);
+        assert!(tangent_bulges(&m, p0, p1, Vec3::Z).is_empty());
+        assert!(tangent_bulges(&Model::new(), p0, p1, Vec3::Z).is_empty());
+    }
 
     #[test]
     fn two_point_arc_geometry() {

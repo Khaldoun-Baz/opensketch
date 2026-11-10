@@ -9,6 +9,7 @@ use crate::guide::Guide;
 use crate::model::{closest_on_line_to_ray, ray_plane, Id, Model};
 use eframe::egui::{Pos2, Rect};
 use glam::Vec3;
+use std::collections::HashSet;
 
 pub const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 
@@ -35,6 +36,10 @@ pub enum SnapKind {
     GuidePoint,
     Intersection,
     OnGuide,
+    /// Drawing parallel to an edge the cursor passed over.
+    Parallel,
+    /// Drawing perpendicular to an edge the cursor passed over.
+    Perpendicular,
 }
 
 impl SnapKind {
@@ -52,6 +57,8 @@ impl SnapKind {
             SnapKind::GuidePoint => "Guide Point",
             SnapKind::Intersection => "Intersection",
             SnapKind::OnGuide => "On Guide",
+            SnapKind::Parallel => "Parallel to Edge",
+            SnapKind::Perpendicular => "Perpendicular to Edge",
         }
     }
 }
@@ -74,11 +81,25 @@ pub struct Snap {
     pub guide: Option<usize>,
     /// Direction of the edge or guide line snapped to.
     pub line_dir: Option<Vec3>,
+    /// "From Point": the point this position lines up with.
+    pub from_point: Option<Vec3>,
 }
 
 impl Snap {
     fn new(pos: Vec3, kind: SnapKind) -> Self {
-        Self { pos, kind, vertex: None, edge: None, face: None, instance: None, normal: None, hit: false, guide: None, line_dir: None }
+        Self {
+            pos,
+            kind,
+            vertex: None,
+            edge: None,
+            face: None,
+            instance: None,
+            normal: None,
+            hit: false,
+            guide: None,
+            line_dir: None,
+            from_point: None,
+        }
     }
 }
 
@@ -97,6 +118,12 @@ pub struct Picker<'a> {
     pub guides: &'a [Guide],
     /// Where guide lines cross each other and edges.
     pub guide_pts: &'a [Vec3],
+    /// Vertices being moved: they, and the edges touching them, are not snapped to.
+    pub skip: Option<&'a HashSet<Id>>,
+    /// Points the cursor passed over lately ("From Point" inference).
+    pub recent: &'a [Vec3],
+    /// Directions of edges the cursor passed over lately (parallel / perpendicular).
+    pub edge_dirs: &'a [Vec3],
 }
 
 fn ray_tri(o: Vec3, d: Vec3, t: &[Vec3; 3]) -> Option<f32> {
@@ -195,18 +222,22 @@ impl<'a> Picker<'a> {
         best.map(|(i, p, _)| (i, p))
     }
 
+    fn skipped(&self, v: Id) -> bool {
+        self.skip.is_some_and(|s| s.contains(&v))
+    }
+
     fn all_edges(&self) -> impl Iterator<Item = (Option<Id>, Vec3, Vec3)> + '_ {
         self.model
             .edges
             .iter()
-            .filter(|(_, e)| !e.soft)
+            .filter(|(_, e)| !e.soft && !self.skipped(e.a) && !self.skipped(e.b))
             .map(|(&id, e)| (Some(id), self.model.pos(e.a), self.model.pos(e.b)))
             .chain(self.segs.iter().map(|&(a, b)| (None, a, b)))
     }
 
     pub fn pick_vertex(&self, cursor: Pos2, tol: f32, o: Vec3, d: Vec3, face_t: Option<f32>) -> Option<(Option<Id>, Vec3)> {
-        let cands = self.model.vertices.iter().map(|(&id, &p)| (Some(id), p)).chain(self.points.iter().map(|&p| (None, p)));
-        self.nearest(cands, cursor, tol, o, d, face_t)
+        let own = self.model.vertices.iter().filter(|(id, _)| !self.skipped(**id)).map(|(&id, &p)| (Some(id), p));
+        self.nearest(own.chain(self.points.iter().map(|&p| (None, p))), cursor, tol, o, d, face_t)
     }
 
     pub fn pick_midpoint(&self, cursor: Pos2, tol: f32, o: Vec3, d: Vec3, face_t: Option<f32>) -> Option<(Option<Id>, Vec3)> {
@@ -279,9 +310,41 @@ impl<'a> Picker<'a> {
             s
         };
 
+        // "From Point": a position on the line through `from` along `dir` that
+        // lines up with a point the cursor passed over lately.
+        let align = |p: Vec3, from: Vec3, dir: Vec3| -> (Vec3, Option<Vec3>) {
+            let mut best: Option<(Vec3, Vec3, f32)> = None;
+            for &r in self.recent {
+                let q = from + dir * (r - from).dot(dir);
+                if q.distance(from) < 1e-4 || q.distance(r) < 1e-4 {
+                    continue;
+                }
+                if let Some(dist) = self.screen_dist(q, cursor) {
+                    if dist < 9.0 && best.is_none_or(|b| dist < b.2) {
+                        best = Some((q, r, dist));
+                    }
+                }
+            }
+            match best {
+                Some((q, r, _)) => (q, Some(r)),
+                None => (p, None),
+            }
+        };
+
         if let (Some(from), Some(ax)) = (from, lock) {
             let p = closest_on_line_to_ray(from, self.axes[ax], o, d);
-            return decorate(Snap::new(p, SnapKind::Axis(ax)));
+            // A locked axis still snaps to real points: the position lines up with them.
+            let target = self
+                .pick_vertex(cursor, 10.0, o, d, face_t)
+                .map(|x| x.1)
+                .or_else(|| self.pick_midpoint(cursor, 9.0, o, d, face_t).map(|x| x.1));
+            let (p, from_point) = match target {
+                Some(t) if t.distance(from) > 1e-4 => (from + self.axes[ax] * (t - from).dot(self.axes[ax]), Some(t)),
+                _ => align(p, from, self.axes[ax]),
+            };
+            let mut s = Snap::new(p, SnapKind::Axis(ax));
+            s.from_point = from_point.filter(|t| t.distance(p) > 1e-4);
+            return decorate(s);
         }
 
         if let Some((v, p)) = self.pick_vertex(cursor, 10.0, o, d, face_t) {
@@ -316,7 +379,32 @@ impl<'a> Picker<'a> {
                 }
             }
             if let Some((i, p, _)) = best {
-                return decorate(Snap::new(p, SnapKind::Axis(i)));
+                let (p, from_point) = align(p, from, self.axes[i]);
+                let mut s = Snap::new(p, SnapKind::Axis(i));
+                s.from_point = from_point;
+                return decorate(s);
+            }
+            // Parallel or perpendicular to an edge the cursor passed over.
+            let mut best: Option<(SnapKind, Vec3, f32)> = None;
+            for &e in self.edge_dirs {
+                let perp = e.cross(self.axes[2]).normalize_or_zero();
+                for (kind, dir) in [(SnapKind::Parallel, e), (SnapKind::Perpendicular, perp)] {
+                    if dir == Vec3::ZERO || self.axes.iter().any(|a| a.dot(dir).abs() > 0.9999) {
+                        continue;
+                    }
+                    let p = closest_on_line_to_ray(from, dir, o, d);
+                    if p.distance(from) < 1e-5 {
+                        continue;
+                    }
+                    if let Some(dist) = self.screen_dist(p, cursor) {
+                        if dist < 9.0 && best.is_none_or(|b| dist < b.2) {
+                            best = Some((kind, p, dist));
+                        }
+                    }
+                }
+            }
+            if let Some((kind, p, _)) = best {
+                return decorate(Snap::new(p, kind));
             }
         }
         if let Some((e, p, dir)) = self.pick_edge(cursor, 7.0, o, d, face_t) {
@@ -357,9 +445,112 @@ mod tests {
         let model = Model::new();
         let cam = Camera::default();
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
-        let picker = Picker { model: &model, cam: &cam, rect, tris: &[], points: &[], segs: &[], axes: AXES, guides, guide_pts: pts };
+        let picker = Picker {
+            model: &model,
+            cam: &cam,
+            rect,
+            tris: &[],
+            points: &[],
+            segs: &[],
+            axes: AXES,
+            guides,
+            guide_pts: pts,
+            skip: None,
+            recent: &[],
+            edge_dirs: &[],
+        };
         let cursor = cam.project(rect, target).unwrap() + vec2(2.0, 1.0);
         picker.snap(cursor, None, None)
+    }
+
+    /// Snaps the cursor placed over `target` while drawing from `from`.
+    fn draw_snap(
+        model: &Model,
+        skip: Option<&HashSet<Id>>,
+        recent: &[Vec3],
+        dirs: &[Vec3],
+        from: Option<Vec3>,
+        lock: Option<usize>,
+        target: Vec3,
+    ) -> Snap {
+        let cam = Camera::default();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let picker = Picker {
+            model,
+            cam: &cam,
+            rect,
+            tris: &[],
+            points: &[],
+            segs: &[],
+            axes: AXES,
+            guides: &[],
+            guide_pts: &[],
+            skip,
+            recent,
+            edge_dirs: dirs,
+        };
+        let cursor = cam.project(rect, target).unwrap() + vec2(2.0, 1.0);
+        picker.snap(cursor, from, lock)
+    }
+
+    #[test]
+    fn moving_geometry_is_not_snapped_to() {
+        let mut m = Model::new();
+        let a = m.add_vertex(Vec3::new(1.0, 1.0, 0.0));
+        let b = m.add_vertex(Vec3::new(2.0, 1.0, 0.0));
+        m.add_edge(a, b);
+        let at = Vec3::new(1.0, 1.0, 0.0);
+        assert_eq!(draw_snap(&m, None, &[], &[], None, None, at).vertex, Some(a));
+        // While `a` is being moved, neither it nor its edge attract the cursor.
+        let skip: HashSet<Id> = [a].into_iter().collect();
+        let s = draw_snap(&m, Some(&skip), &[], &[], None, None, at);
+        assert_eq!((s.kind, s.vertex), (SnapKind::Ground, None));
+        let s = draw_snap(&m, Some(&skip), &[], &[], None, None, Vec3::new(1.5, 1.0, 0.0));
+        assert_eq!(s.kind, SnapKind::Ground);
+        // The far end of the edge stays put, so it still snaps.
+        assert_eq!(draw_snap(&m, Some(&skip), &[], &[], None, None, Vec3::new(2.0, 1.0, 0.0)).vertex, Some(b));
+    }
+
+    #[test]
+    fn lines_up_with_recent_points() {
+        let m = Model::new();
+        let from = Vec3::ZERO;
+        let other = Vec3::new(2.0, 3.0, 0.0);
+        // Drawing along the red axis, near where it passes the other point.
+        let s = draw_snap(&m, None, &[other], &[], Some(from), None, Vec3::new(2.02, 0.0, 0.0));
+        assert_eq!(s.kind, SnapKind::Axis(0));
+        assert!(s.pos.distance(Vec3::new(2.0, 0.0, 0.0)) < 1e-4, "{:?}", s.pos);
+        assert_eq!(s.from_point, Some(other));
+        // Far from that spot it is a plain axis snap.
+        let s = draw_snap(&m, None, &[other], &[], Some(from), None, Vec3::new(1.0, 0.0, 0.0));
+        assert_eq!((s.kind, s.from_point), (SnapKind::Axis(0), None));
+    }
+
+    #[test]
+    fn locked_axis_lines_up_with_the_point_under_the_cursor() {
+        let mut m = Model::new();
+        let v = m.add_vertex(Vec3::new(3.0, 2.0, 0.0));
+        let _ = v;
+        // Locked to red, cursor on a vertex off the axis: stop level with it.
+        let s = draw_snap(&m, None, &[], &[], Some(Vec3::ZERO), Some(0), Vec3::new(3.0, 2.0, 0.0));
+        assert_eq!(s.kind, SnapKind::Axis(0));
+        assert!(s.pos.distance(Vec3::new(3.0, 0.0, 0.0)) < 1e-4, "{:?}", s.pos);
+        assert_eq!(s.from_point, Some(Vec3::new(3.0, 2.0, 0.0)));
+    }
+
+    #[test]
+    fn parallel_and_perpendicular_to_a_recent_edge() {
+        let m = Model::new();
+        let e = Vec3::new(1.0, 1.0, 0.0).normalize();
+        let s = draw_snap(&m, None, &[], &[e], Some(Vec3::ZERO), None, Vec3::new(2.0, 2.02, 0.0));
+        assert_eq!(s.kind, SnapKind::Parallel);
+        assert!(s.pos.normalize().dot(e) > 0.9999);
+        let s = draw_snap(&m, None, &[], &[e], Some(Vec3::ZERO), None, Vec3::new(2.0, -2.02, 0.0));
+        assert_eq!(s.kind, SnapKind::Perpendicular);
+        assert!(s.pos.normalize().dot(e).abs() < 1e-3);
+        // The main axes win over an edge that runs along one of them.
+        let s = draw_snap(&m, None, &[], &[Vec3::X], Some(Vec3::ZERO), None, Vec3::new(2.0, 0.01, 0.0));
+        assert_eq!(s.kind, SnapKind::Axis(0));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 //! OpenSketch — a SketchUp-style push/pull 3D modeler written in Rust.
 
+mod ai;
 mod annotation;
 mod app;
 mod camera;

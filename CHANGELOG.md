@@ -6,6 +6,32 @@ All notable changes to OpenSketch are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **AI Render** (File ▸ AI Render…): turn the current view into a
+  hyper-realistic picture with an AI image model, using your own account with
+  OpenAI (or a compatible service), Google Gemini or Stability AI, or a Stable
+  Diffusion running on your own computer. Styles, a "keep my model's shape"
+  control, editable address / model / extra options, before-and-after view and
+  PNG export.
+- Push/Pull stops level with a corner, edge or parallel face you point at, and
+  double-clicking a face repeats the last distance.
+- Move picks up what is under the cursor when nothing is selected, including a
+  single corner point, and highlights it first. Faces that stop being flat
+  after a move fold along new edges (auto-fold).
+- 2-point arcs snap to tangents ("Tangent at Vertex").
+- Inference: "From Point" alignment along an axis, and parallel /
+  perpendicular to an edge.
+- `OPENSKETCH_SCRIPT` plays scripted mouse and keyboard input for testing.
+
+### Changed
+- Tools act when the mouse button goes down (click-move-click), and also
+  finish on release after a real drag. A small wobble during a click no longer
+  starts and finishes a tiny shape.
+- Geometry being moved, rotated or scaled no longer snaps to its own old
+  position.
+- A Move, Rotate or Scale that picked its own target leaves nothing selected
+  afterwards, so the next one picks what is under the cursor again.
+
 ## [0.1.1] - 2026-11-10
 
 ### Changed
