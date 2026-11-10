@@ -6,6 +6,19 @@ All notable changes to OpenSketch are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-10
+
+### Changed
+- Help ▸ Keyboard shortcuts now lists Protractor, Dimension, Text, Solid
+  Tools and Ctrl with the Tape Measure, and scrolls so it fits on small
+  screens ([#11](https://github.com/Khaldoun-Baz/opensketch/pull/11), by
+  [agenticsymphony-tech](https://github.com/agenticsymphony-tech): the
+  project's first outside contribution).
+
+### Project
+- New website: <https://khaldoun-baz.github.io/opensketch/>
+- GitHub Discussions is open for questions and ideas.
+
 ## [0.1.0] - 2026-11-07
 
 First public release.
@@ -44,5 +57,6 @@ First public release.
 - Window openings cut only the face they're glued to, not through thick walls.
 - No copy/paste yet, and no tool to reposition a texture on a single face.
 
-[Unreleased]: https://github.com/Khaldoun-Baz/opensketch/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Khaldoun-Baz/opensketch/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Khaldoun-Baz/opensketch/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Khaldoun-Baz/opensketch/releases/tag/v0.1.0

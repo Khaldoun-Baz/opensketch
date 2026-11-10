@@ -8,6 +8,9 @@ An open-source, SketchUp-style push/pull 3D modeler written in Rust (egui + Open
 Draw on the ground or on faces, push/pull shapes into 3D, and build with groups,
 components, guides, dimensions, textures and shadows.
 
+**Website:** <https://khaldoun-baz.github.io/opensketch/> ·
+**Questions and ideas:** [Discussions](https://github.com/Khaldoun-Baz/opensketch/discussions)
+
 ![OpenSketch: a textured house with a recessed window and sun shadows](docs/screenshot.png)
 
 ## Download
@@ -89,7 +92,9 @@ See the [contributors graph](https://github.com/Khaldoun-Baz/opensketch/graphs/c
 
 Contributions are welcome: bug reports, feature ideas, docs and code. Read
 [CONTRIBUTING.md](CONTRIBUTING.md) to get started, and check the issues labeled
-**good first issue**. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+**good first issue**. Questions and ideas are welcome in
+[Discussions](https://github.com/Khaldoun-Baz/opensketch/discussions). Please
+follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
