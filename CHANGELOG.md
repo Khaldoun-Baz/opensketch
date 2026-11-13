@@ -6,6 +6,11 @@ All notable changes to OpenSketch are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-13
+
+Tools that handle much more like SketchUp, a sample house to explore, and
+AI renders of your model.
+
 ### Added
 - **AI Render** (File ▸ AI Render…): turn the current view into a
   hyper-realistic picture with an AI image model, using your own account with
@@ -37,6 +42,11 @@ All notable changes to OpenSketch are listed here. The format follows
   position.
 - A Move, Rotate or Scale that picked its own target leaves nothing selected
   afterwards, so the next one picks what is under the cursor again.
+- The website and README show the stone house and the new tools.
+
+### Fixed
+- Text in the status bar and Help window no longer shows empty boxes where
+  it used arrow symbols the app's font can't draw.
 
 ## [0.1.1] - 2026-11-10
 
@@ -89,6 +99,7 @@ First public release.
 - Window openings cut only the face they're glued to, not through thick walls.
 - No copy/paste yet, and no tool to reposition a texture on a single face.
 
-[Unreleased]: https://github.com/Khaldoun-Baz/opensketch/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Khaldoun-Baz/opensketch/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Khaldoun-Baz/opensketch/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Khaldoun-Baz/opensketch/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Khaldoun-Baz/opensketch/releases/tag/v0.1.0
