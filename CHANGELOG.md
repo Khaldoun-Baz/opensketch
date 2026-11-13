@@ -22,6 +22,12 @@ All notable changes to OpenSketch are listed here. The format follows
 - Inference: "From Point" alignment along an axis, and parallel /
   perpendicular to an edge.
 - `OPENSKETCH_SCRIPT` plays scripted mouse and keyboard input for testing.
+- File ▸ Samples ▸ Stone house with arches: a complete sample house built
+  with the kernel (walls pulled up and windows pushed in), in named groups,
+  with tags for the roof and the tree and a saved "Street view" scene.
+- Limestone blocks and clay roof tiles textures.
+- `opensketch file.osk` opens a model; `opensketch --sample stone-house`
+  opens a sample.
 
 ### Changed
 - Tools act when the mouse button goes down (click-move-click), and also

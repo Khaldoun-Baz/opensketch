@@ -12,6 +12,7 @@ mod inference;
 mod io;
 mod model;
 mod render;
+mod samples;
 mod solid;
 mod sun;
 mod texture;

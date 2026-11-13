@@ -9,6 +9,7 @@ use crate::inference::{Owner, Picker, Snap, SnapKind, AXES};
 use crate::io;
 use crate::model::{closest_on_line_to_ray, drawing_axes, offset_loop, point_seg, ray_plane, Id, Material, Model, EPS};
 use crate::render::{push_face_vertex, push_line, push_vertex, DrawData, Renderer, ShadowData, TexBatch, FLOATS};
+use crate::samples;
 use crate::solid::{self, BoolOp};
 use crate::sun::{self, Sun};
 use crate::texture::{self, Pattern, Pixels, Texture};
@@ -959,6 +960,12 @@ impl App {
             ai: AiUi::new(),
             ai_test: None,
         };
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        match args.as_slice() {
+            [flag, name] if flag == "--sample" => app.load_sample(name),
+            [file] if !file.starts_with('-') => app.open_path(PathBuf::from(file)),
+            _ => {}
+        }
         if let Some(path) = std::env::var_os("OPENSKETCH_SHOT") {
             app.doc = demo_document(std::env::var_os("OPENSKETCH_SHOT_NO_GROUND").is_none());
             app.load_context();
@@ -1962,6 +1969,37 @@ impl App {
 
     fn open(&mut self) {
         let Some(p) = rfd::FileDialog::new().add_filter("OpenSketch model", &["osk"]).pick_file() else { return };
+        self.open_path(p);
+    }
+
+    /// Opens a sample model as a new, unsaved document.
+    fn load_sample(&mut self, name: &str) {
+        let Some(doc) = samples::by_name(name) else {
+            let names: Vec<&str> = samples::SAMPLES.iter().map(|s| s.0).collect();
+            self.status = format!("No sample called \"{name}\". Samples: {}", names.join(", "));
+            return;
+        };
+        self.doc = doc;
+        self.path.clear();
+        self.load_context();
+        self.undo.clear();
+        self.redo.clear();
+        self.file = None;
+        self.dirty = true;
+        self.set_tool(Tool::Select);
+        self.zoom_extents();
+        if !self.doc.scenes.is_empty() {
+            self.go_to_scene(0);
+            // Start at the scene's view instead of flying there.
+            if let Some(anim) = self.cam_anim.take() {
+                self.cam = anim.to;
+            }
+        }
+        let label = samples::SAMPLES.iter().find(|s| s.0.eq_ignore_ascii_case(name)).map(|s| s.1).unwrap_or(name);
+        self.status = format!("Sample: {label}. Use File ▸ Save As to keep your own copy.");
+    }
+
+    fn open_path(&mut self, p: PathBuf) {
         match io::load(&p) {
             Ok(doc) => {
                 self.doc = doc;
@@ -4497,6 +4535,14 @@ impl App {
                         ui.close_menu();
                         self.open();
                     }
+                    ui.menu_button("Samples", |ui| {
+                        for (key, label, _) in samples::SAMPLES {
+                            if ui.button(*label).clicked() {
+                                ui.close_menu();
+                                self.load_sample(key);
+                            }
+                        }
+                    });
                     if ui.button("Save               Ctrl+S").clicked() {
                         ui.close_menu();
                         self.save();

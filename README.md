@@ -27,6 +27,13 @@ Requires Rust stable (1.88+) from <https://rustup.rs>.
 cargo run --release
 ```
 
+Open a model or a sample straight from the command line:
+
+```bash
+cargo run --release -- my-house.osk
+cargo run --release -- --sample stone-house
+```
+
 On Linux, first install the windowing libraries:
 
 ```bash
@@ -57,6 +64,7 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev lib
 | Textures | Built-in procedural textures (brick, wood planks, roof shingles, grass, cobblestone, floor tiles) on the default materials, or Materials ▸ Load image… (PNG/JPEG, embedded in the `.osk` file). Real-world texture size per material; textures are projected onto each face's plane and stay put on groups. Painted faces show their material on both sides. OBJ export writes the texture PNGs (`map_Kd`) and UVs |
 | Shadows | Shadows panel (or View ▸ Shadows): time of day, date, latitude and north angle drive the sun; shadow-mapped shadows on faces and on the ground (even where there is no ground face), sun-based shading. Saved in the file and in scenes |
 | AI Render | File ▸ AI Render… turns the current view into a hyper-realistic picture with an AI image model. Bring your own account: OpenAI (or any compatible service), Google Gemini, Stability AI, or a Stable Diffusion running on your own PC (AUTOMATIC1111 / Forge, free and private). The address, model name and extra request options are editable, so new models work without a new release. Describe the scene, pick a style (daylight, golden hour, overcast, dusk, interior, aerial, watercolor, pencil, clay model) and how strictly the model's shape is kept; compare with your view and save as PNG. See [AI Render](#ai-render) |
+| Samples | File ▸ Samples ▸ *Stone house with arches*: a two-storey limestone house with an arcaded loggia, pointed-arch windows, a balcony, a side terrace with outside stairs, a hipped clay-tile roof and a tree, built from groups you can open and edit. Opens as an unsaved copy: File ▸ Save As keeps it |
 | Files | Native `.osk` (JSON), OBJ import, OBJ (+MTL) and STL export, undo/redo (Ctrl+Z / Ctrl+Y) |
 
 ## Code map

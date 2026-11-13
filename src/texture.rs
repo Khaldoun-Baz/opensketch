@@ -16,10 +16,23 @@ pub enum Pattern {
     Grass,
     Stone,
     Tiles,
+    /// Dressed limestone blocks in courses (ashlar).
+    Ashlar,
+    /// Orange clay roof tiles.
+    ClayTiles,
 }
 
 impl Pattern {
-    pub const ALL: [Pattern; 6] = [Pattern::Brick, Pattern::Wood, Pattern::Shingles, Pattern::Grass, Pattern::Stone, Pattern::Tiles];
+    pub const ALL: [Pattern; 8] = [
+        Pattern::Brick,
+        Pattern::Wood,
+        Pattern::Shingles,
+        Pattern::Grass,
+        Pattern::Stone,
+        Pattern::Tiles,
+        Pattern::Ashlar,
+        Pattern::ClayTiles,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -29,6 +42,8 @@ impl Pattern {
             Pattern::Grass => "Grass",
             Pattern::Stone => "Cobblestone",
             Pattern::Tiles => "Floor tiles",
+            Pattern::Ashlar => "Limestone blocks",
+            Pattern::ClayTiles => "Clay roof tiles",
         }
     }
 
@@ -41,6 +56,8 @@ impl Pattern {
             Pattern::Grass => [1.0, 1.0],
             Pattern::Stone => [1.0, 1.0],
             Pattern::Tiles => [1.2, 1.2],
+            Pattern::Ashlar => [1.4, 0.7],
+            Pattern::ClayTiles => [0.8, 0.8],
         }
     }
 }
@@ -280,6 +297,34 @@ fn shade(p: Pattern, x: f32, y: f32) -> [f32; 3] {
             } else {
                 scale(mixc([0.52, 0.50, 0.47], [0.66, 0.63, 0.58], id), 0.85 + 0.3 * grain)
             }
+        }
+        Pattern::Ashlar => {
+            // 2 courses, 2 blocks per course, running bond; thin pale joints
+            // and a slightly darker, weathered rim on every block.
+            let row = (y * 2.0).floor();
+            let shift = if row as i32 % 2 == 1 { 0.25 } else { 0.0 };
+            let bx = (x + shift).rem_euclid(1.0) * 2.0;
+            let (fx, fy) = (bx.fract(), (y * 2.0).fract());
+            if fx < 0.012 || fy < 0.025 {
+                return scale([0.93, 0.91, 0.86], 0.95 + 0.08 * grain);
+            }
+            let id = hash(bx.floor() as i32, row as i32, 61);
+            let base = mixc([0.89, 0.84, 0.71], [0.97, 0.93, 0.82], id);
+            let rim = (fx.min(1.0 - fx) * 9.0).min(fy.min(1.0 - fy) * 4.5).min(1.0);
+            let pits = noise(x, y, 48, 67);
+            scale(base, (0.80 + 0.2 * rim) * (0.9 + 0.16 * grain) * (0.94 + 0.08 * pits))
+        }
+        Pattern::ClayTiles => {
+            // 4 rows of rounded tiles, staggered; each tile is lit across its width.
+            let row = (y * 4.0).floor();
+            let shift = if row as i32 % 2 == 1 { 0.125 } else { 0.0 };
+            let tx = ((x + shift).rem_euclid(1.0) * 4.0).fract();
+            let fy = (y * 4.0).fract();
+            let id = hash(((x + shift).rem_euclid(1.0) * 4.0) as i32, row as i32, 71);
+            let base = mixc([0.74, 0.33, 0.17], [0.86, 0.45, 0.23], id);
+            let round = 0.72 + 0.28 * (tx * std::f32::consts::PI).sin();
+            let lap = if fy < 0.1 { 0.7 } else { 1.0 };
+            scale(base, round * lap * (0.9 + 0.2 * grain))
         }
         Pattern::Tiles => {
             let (fx, fy) = ((x * 4.0).fract(), (y * 4.0).fract());
