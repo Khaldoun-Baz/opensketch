@@ -11,7 +11,9 @@ components, guides, dimensions, textures and shadows.
 **Website:** <https://khaldoun-baz.github.io/opensketch/> ·
 **Questions and ideas:** [Discussions](https://github.com/Khaldoun-Baz/opensketch/discussions)
 
-![OpenSketch: a textured house with a recessed window and sun shadows](docs/screenshot.png)
+![OpenSketch with the sample stone house: arcaded porch, pointed-arch windows, balcony, side terrace with stairs, clay tile roof and sun shadows](docs/stone-house.jpg)
+
+More pictures on the [website](https://khaldoun-baz.github.io/opensketch/#gallery).
 
 ## Download
 

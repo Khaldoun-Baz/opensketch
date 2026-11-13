@@ -1996,7 +1996,7 @@ impl App {
             }
         }
         let label = samples::SAMPLES.iter().find(|s| s.0.eq_ignore_ascii_case(name)).map(|s| s.1).unwrap_or(name);
-        self.status = format!("Sample: {label}. Use File ▸ Save As to keep your own copy.");
+        self.status = format!("Sample: {label}. Use File > Save As to keep your own copy.");
     }
 
     fn open_path(&mut self, p: PathBuf) {
@@ -4436,7 +4436,7 @@ impl App {
         match (self.tool, &self.state) {
             (_, State::Place { .. }) => "Click to place the component (gluing components snap onto faces). Esc cancels.",
             (Tool::Select, _) => {
-                "Click to select (Shift toggles, Ctrl adds). Drag L→R = window, R→L = crossing. Double-click a group to edit it."
+                "Click to select (Shift toggles, Ctrl adds). Drag right = window, drag left = crossing. Double-click a group to edit it."
             }
             (Tool::Line, State::Line { .. }) => "Click end point or type a length + Enter. Arrow keys lock axes, Esc finishes.",
             (Tool::Line, _) => "Click to start a line. Closed coplanar loops become faces; lines across faces split them.",
@@ -4920,7 +4920,7 @@ impl App {
                         if ui.button("Make Component").clicked() {
                             self.make_group(DefKind::Component);
                         }
-                        if ui.button("Intersect with Model").on_hover_text("Edit ▸ Intersect Faces ▸ With Model").clicked() {
+                        if ui.button("Intersect with Model").on_hover_text("Edit > Intersect Faces > With Model").clicked() {
                             self.intersect(true);
                         }
                         if nf > 0 && ui.button("Reverse faces").clicked() {
@@ -5441,7 +5441,7 @@ impl App {
                         ("Click or drag", "Tools work click-move-click, or press-drag-release"),
                         ("M / Q / S", "Move / Rotate / Scale"),
                         ("E / B / T", "Eraser / Paint Bucket / Tape Measure"),
-                        ("Protractor", "Click center → baseline → angle (type 30 or a slope 1:2)"),
+                        ("Protractor", "Click center, then baseline, then angle (type 30 or a slope 1:2)"),
                         ("Dimension", "Two points or an edge; click an arc/circle for R / Ø"),
                         ("Text", "Click geometry for leader text, empty space for screen text"),
                         ("Solid Tools", "Click the first solid, then the second"),
@@ -5452,7 +5452,7 @@ impl App {
                         ("Middle-drag", "Orbit (Shift = pan)"),
                         ("Right-drag", "Pan"),
                         ("Scroll", "Zoom to cursor"),
-                        ("Arrow →/←/↑", "Lock red / green / blue axis (↓ unlocks)"),
+                        ("Arrow keys", "Right / Left / Up lock red / green / blue (Down unlocks)"),
                         ("Hold Shift", "Lock the current axis inference"),
                         ("Type + Enter", "Exact value (2.5, 300mm, 4,3, 24s, 3x, /4)"),
                         ("Ctrl (Move)", "Toggle copy"),

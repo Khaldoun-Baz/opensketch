@@ -10,7 +10,7 @@
 <meta property="og:title" content="OpenSketch: free, open-source push/pull 3D modeler">
 <meta property="og:description" content="Draw on faces, push/pull into 3D. Groups, components, solid tools, dimensions, textures and sun shadows. Written in Rust, MIT licensed.">
 <meta property="og:url" content="https://khaldoun-baz.github.io/opensketch/">
-<meta property="og:image" content="https://khaldoun-baz.github.io/opensketch/screenshot.png">
+<meta property="og:image" content="https://khaldoun-baz.github.io/opensketch/stone-house.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 28 9.5v13L16 29 4 22.5v-13z' fill='%23e8743b'/%3E%3Cpath d='M16 3 28 9.5 16 16 4 9.5z' fill='%23f6a46e'/%3E%3Cpath d='M16 16v13l12-6.5v-13z' fill='%23b8501f'/%3E%3C/svg%3E">
 <style>
@@ -81,6 +81,15 @@
   .shot { margin: 36px auto 0; max-width: 960px; }
   .shot img { width: 100%; height: auto; display: block; border-radius: 12px; border: 1px solid var(--line); box-shadow: var(--shadow); }
 
+  .gallery { display: grid; grid-template-columns: 1.25fr 1fr; gap: 20px; align-items: start; }
+  .gallery.even { grid-template-columns: 1fr 1fr; }
+  figure { margin: 0; }
+  figure img { width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid var(--line); background: var(--card); }
+  figcaption { margin-top: 10px; font-size: 15px; color: var(--muted); }
+  figcaption strong { color: var(--text); }
+  .stack { display: grid; gap: 20px; }
+  @media (max-width: 760px) { .gallery, .gallery.even { grid-template-columns: 1fr; } }
+
   section { padding: 56px 0; }
   section.alt { background: var(--bg-alt); }
   h2 { font-size: clamp(26px, 3.6vw, 34px); margin: 0 0 8px; letter-spacing: -0.01em; }
@@ -122,6 +131,7 @@
       OpenSketch
     </a>
     <nav>
+      <a class="opt" href="#gallery">Gallery</a>
       <a class="opt" href="#features">Features</a>
       <a href="#download">Download</a>
       <a class="opt" href="#contribute">Contribute</a>
@@ -140,9 +150,45 @@
   </div>
 
   <div class="shot">
-    <img src="screenshot.png" width="1036" height="844" alt="OpenSketch showing a brick house with a wooden roof and a recessed window next to a stone block on grass, with sun shadows.">
+    <img src="stone-house.jpg" width="1440" height="900" alt="OpenSketch with a two-storey limestone house open: an arcaded porch, pointed-arch windows, a balcony, a side terrace with outside stairs, a clay tile roof and a tree, with sun shadows.">
   </div>
 </div>
+
+<section id="gallery" class="alt">
+  <div class="wrap">
+    <h2>Made with OpenSketch</h2>
+    <p class="section-lead">This house comes with the app: open it from <strong>File ▸ Samples</strong>, take it apart and make it your own. Its walls were pulled up from a rectangle and every window pushed in, the same way you would model it by hand.</p>
+    <div class="gallery">
+      <figure>
+        <img src="stone-house-side.jpg" width="1033" height="822" loading="lazy" alt="The sample house from the side: arches under a terrace, outside stairs with white railings, pointed-arch doors and a hipped clay tile roof.">
+        <figcaption><strong>The stone house sample.</strong> Limestone walls, an arcaded wing with a terrace, stairs down to the garden. Every part is a named group you can open and edit.</figcaption>
+      </figure>
+      <div class="stack">
+        <figure>
+          <img src="screenshot.png" width="1036" height="844" loading="lazy" alt="A small brick house with a wooden roof and a recessed window next to a stone block on grass, with sun shadows.">
+          <figcaption><strong>Textures and sun shadows.</strong> Built-in brick, wood, stone and tile textures, or your own images; shadows for any date, time and place.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="handling">
+  <div class="wrap">
+    <h2>Modeling that feels familiar</h2>
+    <p class="section-lead">Click, move, click. The tools guess what you mean and show it as you go, so shapes come out right the first time.</p>
+    <div class="gallery even">
+      <figure>
+        <img src="arc-tangent.jpg" width="580" height="260" loading="lazy" alt="An arc drawn from the end of a line turns cyan and shows the label Tangent at Vertex.">
+        <figcaption><strong>Arcs that flow.</strong> Start an arc where a line ends and it snaps to continue smoothly: it turns cyan and says “Tangent at Vertex”.</figcaption>
+      </figure>
+      <figure>
+        <img src="move-corner.jpg" width="560" height="510" loading="lazy" alt="One top corner of a box lifted with the Move tool; the faces around it fold into triangles.">
+        <figcaption><strong>Grab a corner, reshape the box.</strong> Move picks up the point under the cursor, and faces that stop being flat fold along new edges.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
 
 <section id="features">
   <div class="wrap">
